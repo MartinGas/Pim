@@ -1,0 +1,11 @@
+# excluded folders
+/target
+/data
+
+
+# work files
+*.lock
+
+# temps
+*~
+
