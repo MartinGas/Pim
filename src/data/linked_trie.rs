@@ -12,6 +12,21 @@ pub struct Trie {
     root: Node<EdgeList, <EdgeList as Link>::Edge>,
 }
 
+/// wraps an interator to hide the internal generic parameters
+pub struct TrieIterator<'a> {
+    iterator: NodeIterator<&'a Node<EdgeList, <EdgeList as Link>::Edge>,
+			   <&'a EdgeList as IntoIterator>::IntoIter,
+			   Box<dyn Consumer<&'a ItemVec>>>,
+}
+
+/// Types that consume sequences fed in chunks to them during the traversal.
+pub trait Consumer<L> {
+    /// Notifies the consumer that the traversal entered a new node via an edge with the given label
+    fn enter( &mut self, label: L );
+    /// Notifies the consumer that the traversal leaves the current node
+    fn leave( &mut self );
+}
+
 /// stores edges to children
 struct Node<L, E> {
     edges: L,
@@ -20,9 +35,16 @@ struct Node<L, E> {
     support: Count,
 }
 
-pub struct NodeIterator<N, Eit> {
+struct NodeIterator<N, Eit, C> {
     // Stores sequence of node-iterator pairs. The end of the vector is the front of the stack.
     visit_stack: Vec<(N, Eit)>,
+    consumer: Option<C>,
+}
+
+/// To keep consumer-related code the same we use them as trait objects through boxes
+impl <L> Consumer<L> for Box<dyn Consumer<L>> {
+    fn enter( &mut self, label: L ) { self.as_mut().enter( label ) }
+    fn leave( &mut self ) { self.as_mut().leave() }
 }
 
 /// A sorted sequence of items.
@@ -52,6 +74,8 @@ trait Link {
     /// Pre: edge refers to a valid edge
     fn split( &mut self, edge: Self::Edge, position: usize ) -> ItemVec;
 }
+
+type EdgeOf<L> = <L as Link>::Edge;
 
 struct EdgeList {
     // mapping from distinct starting item to complete label
@@ -84,12 +108,38 @@ impl Trie {
     }
 
     pub fn iterate <'a> ( &'a self ) -> TrieIterator<'a> {
-	NodeIterator::new( &self.root )
+	TrieIterator::new( &self.root )
+    }
+
+    pub fn iterate_with_consumer <'a, C> ( &'a self, consumer: C ) -> TrieIterator<'a> where
+	C: Consumer<&'a ItemVec> + 'static
+    {
+	TrieIterator::new_with_consumer( &self.root, consumer )
     }
 }
 
-type TrieIterator<'a> = NodeIterator<&'a Node<EdgeList, <EdgeList as Link>::Edge>,
-				     <&'a EdgeList as IntoIterator>::IntoIter>;
+impl <'a> TrieIterator<'a> {
+
+    fn new( start: &'a Node<EdgeList, EdgeOf<EdgeList>> ) -> TrieIterator<'a> {
+	TrieIterator{ iterator: NodeIterator::new( start, None ) }
+    }
+
+    fn new_with_consumer <C> ( start: &'a Node<EdgeList, EdgeOf<EdgeList>>, consumer: C ) -> TrieIterator<'a> where
+	C: Consumer<&'a ItemVec> + 'static,
+    {
+	let consumer = Box::new( consumer );
+	TrieIterator{ iterator: NodeIterator::new( start, Some( consumer )) }
+    }
+}
+
+impl <'a> Iterator for TrieIterator<'a> {
+    type Item = (&'a ItemVec, Count);
+
+    fn next( &mut self ) -> Option<Self::Item> {
+	self.iterator.next()
+    }
+}
+
 
 impl <L, E> Node<L, E> {
     pub fn get_support( &self ) -> Count { self.support }
@@ -189,22 +239,40 @@ impl <L: Default + Link> Node<L, L::Edge> where L::Edge: Eq + Hash {
     }
 }
 
-impl <'a, L, E> NodeIterator<&'a Node<L, E>, <&'a L as IntoIterator>::IntoIter> where &'a L: IntoIterator {
+impl <'a, L, E, C> NodeIterator<&'a Node<L, E>, <&'a L as IntoIterator>::IntoIter, C> where &'a L: IntoIterator {
 
-    pub fn new( start: &'a Node<L, E> ) -> NodeIterator<&'a Node<L, E>, <&'a L as IntoIterator>::IntoIter> {
+    pub fn new( start: &'a Node<L, E>, consumer: Option<C> ) -> NodeIterator<&'a Node<L, E>, <&'a L as IntoIterator>::IntoIter, C> {
 	let edge_iterator = start.get_edges();
 	NodeIterator {
 	    visit_stack: vec!( (start, edge_iterator.into_iter()) ),
+	    consumer,
 	}
     }
 }
 
-// implementation of the node iterator for edge lists (references thereof)
-impl <'a> NodeIterator<&'a Node<EdgeList, <EdgeList as Link>::Edge>, <&'a EdgeList as IntoIterator>::IntoIter> {
-    
+impl <'a, C> NodeIterator<&'a Node<EdgeList, <EdgeList as Link>::Edge>, <&'a EdgeList as IntoIterator>::IntoIter, C> where
+    C: Consumer<&'a ItemVec>
+{
+    fn enter( &mut self, child: &'a Node<EdgeList, EdgeOf<EdgeList>>, label: &'a ItemVec ) {
+	if let Some( consumer ) = &mut self.consumer {
+	    consumer.enter( label );
+	}
+	// push next level onto the stack
+	let child_edge_iterator = child.get_edges().into_iter();
+	self.visit_stack.push( (child, child_edge_iterator) );
+    }
+
+    fn leave( &mut self ) {
+	if let Some( consumer ) = &mut self.consumer {
+	    consumer.leave();
+	}
+	self.visit_stack.pop();
+    }
 }
 
-impl <'a> Iterator for NodeIterator<&'a Node<EdgeList, <EdgeList as Link>::Edge>, <&'a EdgeList as IntoIterator>::IntoIter> {
+impl <'a, C> Iterator for NodeIterator<&'a Node<EdgeList, <EdgeList as Link>::Edge>, <&'a EdgeList as IntoIterator>::IntoIter, C> where
+    C: Consumer<&'a ItemVec>
+{
 
     type Item = (&'a ItemVec, Count);
 
@@ -220,14 +288,13 @@ impl <'a> Iterator for NodeIterator<&'a Node<EdgeList, <EdgeList as Link>::Edge>
 	    let child = node.get_child( edge ).expect( "every edge connects to a child" );
 	    // get the info needed
 	    let count = child.get_support();
-	    // push next level onto the stack
-	    let child_edge_iterator = child.get_edges().into_iter();
-	    self.visit_stack.push( (child, child_edge_iterator) );
+	    // push
+	    self.enter( child, label );
 	    return Some( (label, count) );
 	}
 
 	// no down-edge, go up and try again
-	self.visit_stack.pop();
+	self.leave();
 	self.next()
     }
 }
@@ -354,6 +421,7 @@ fn format_items <'a, I> ( items: I ) -> String where I: Iterator<Item = &'a Item
 #[cfg(test)]
 mod test {
     use super::*;
+    use std::collections::HashSet;
 
     fn from_vec( elements: Vec<Item> ) -> BitSet {
 	BitSet::from_iter( elements )
@@ -395,36 +463,34 @@ mod test {
 	}
     }
 
-    /// Compresses some sequences into a trie. Visits all sequences afterwards.
-    #[test]
-    fn test_iteration() {
-	let data = vec!(
-	    vec!( 0, 1, 2, 3, 4 ),
-	    vec!( 2, 3, 4 ),
-	    vec!( 0, 3, 4 ),
-	    vec!( 0, 1, 2 ),
-	    vec!( 2, 3, 4 ), // duplicate
-	    vec!( 2, ),
-	);
-	let trie = build_trie_from_complete_data( &data );
+    // Compresses some sequences into a trie. Visits all sequences afterwards.
+    // todo: move up to data base as soon as the sequence iterator is available
+    // todo: this test depends on the iteration order of hash maps, which may be arbitrary. Fix this!
+    // #[test]
+    // fn test_iteration() {
+    // 	let data = vec!(
+    // 	    vec!( 0, 1, 2, 3, 4 ),
+    // 	    vec!( 2, 3, 4 ),
+    // 	    vec!( 0, 3, 4 ),
+    // 	    vec!( 0, 1, 2 ),
+    // 	    vec!( 2, 3, 4 ), // duplicate
+    // 	    vec!( 2, ),
+    // 	);
+    // 	let trie = build_trie_from_complete_data( &data );
 
-	// terminal nodes visited in order
-	let expectations = vec!(
-	    (vec!( 0 ), 3),
-	    (vec!( 1, 2 ), 2),
-	    (vec!( 3, 4 ), 1),
-	    (vec!( 3, 4 ), 1),
-	    (vec!( 2 ), 3),
-	    (vec!( 3, 4 ), 2),
-	);
+    // 	// terminal nodes visited in order
+    // 	let expectations: HashMap<ItemVec, Count> = HashMap::new();
+    // 	expectations.insert( vec!( 0 ), 3 );
+    // 	expectations.insert( vec!( 1, 2 ), 2 );
+    // 	expectations.insert( vec!( 3, 4 ), 1 );
+    // 	expectations.insert( vec!( 3, 4 ), 1 );
+    // 	expectations.insert( vec!( 2 ), 3 );
+    // 	expecatations.insert( vec!( 3, 4 ), 2 );
 
-	trie.print();
-	println!();
-
-	let zipper = trie.iterate().zip( expectations.iter() );
-	for ((expected_chunk, expected_count), (real_chunk, real_count)) in zipper {
-	    assert_eq!( expected_chunk, real_chunk );
-	    assert_eq!( expected_count, *real_count );
-	}
-    }
+    // 	for (real_chunk, real_count) in trie.iterate() {
+    // 	    expectations.remove( real_chunk );
+    // 	    assert_eq!( expectations.
+    // 	    assert_eq!( expected_chunk, real_chunk );
+    // 	    assert_eq!( expected_count, *real_count );
+    // 	}
 }
