@@ -72,7 +72,7 @@ trait Link {
 
     /// Splits the edge from the given position onwards and returns the label split off
     /// Pre: edge refers to a valid edge
-    fn split( &mut self, edge: Self::Edge, position: usize ) -> ItemVec;
+    fn split( &mut self, edge: &Self::Edge, position: usize ) -> ItemVec;
 }
 
 type EdgeOf<L> = <L as Link>::Edge;
@@ -184,7 +184,6 @@ impl <L: Link> Node<L, L::Edge> where L::Edge: Eq + Hash {
     /// Pushes a prefix down to the child
     /// Pre: there is no edge for the given edge_label
     fn push( &mut self, edge_label: ItemSeq, child: Node<L, L::Edge> ) {
-	// todo: better interface, this is overblown
 	let edge = self.edges.add( edge_label );
 	assert!( !self.children.contains_key( &edge ) ); // there is a slot for every edge
 	self.children.insert( edge, child );
@@ -211,7 +210,7 @@ impl <L: Link> Node<L, L::Edge> where L::Edge: Eq + Hash {
     }
 }
 
-impl <L: Default + Link> Node<L, L::Edge> where L::Edge: Eq + Hash {
+impl <L: Default + Link> Node<L, L::Edge> where L::Edge: Eq + Hash + Clone {
     /// Extends an existing branch or creates a new one
     pub fn add( &mut self, transaction: ItemSeq ) {
 	self.support += 1;
@@ -221,15 +220,24 @@ impl <L: Default + Link> Node<L, L::Edge> where L::Edge: Eq + Hash {
 
 	if let Some( (edge, add_pos, is_complete) ) = self.edges.walk( transaction ) {
 	    assert!( self.children.contains_key( &edge ) );
-	    let child = self.children.get_mut( &edge ).expect( "there is an edge to a valid node" );
-	    // there is an edge
-	    if !is_complete {
-		let excess = self.edges.split( edge, add_pos );
-		child.push( &excess, Node::new( child.support ));
-	    }
 	    // if add_pos is out of bounds we simply pass on the empty slice
 	    let remainder = transaction.get( add_pos .. ).unwrap_or( &[] );
-	    child.add( remainder );
+
+	    // there is an edge
+	    if !is_complete {
+		// Only part of the prefix matched, so we need to introduce an new node to branch in between.
+		let excess = self.edges.split( &edge, add_pos );
+		let intermediate = Node::new( 0 ); // set correct support later
+		// push the current child down to intermediate
+		let pushed_down_child = self.children.insert( edge.clone(), intermediate ).expect( "Push down existing child" );
+		let intermediate = self.children.get_mut( &edge ).expect( "Inserted intermediate child" );
+		intermediate.support = pushed_down_child.support;
+		intermediate.push( &excess, pushed_down_child );
+		intermediate.add( remainder );
+	    } else {
+		let child = self.children.get_mut( &edge ).expect( "Edge leads to child" );
+		child.add( remainder );
+	    }
 	} else {
 	    // we need a new edge and node
 	    let edge = self.edges.add( &transaction );
@@ -387,7 +395,7 @@ impl Link for EdgeList {
 	head
     }
 
-    fn split( &mut self, edge: Self::Edge, position: usize ) -> ItemVec {
+    fn split( &mut self, edge: &Self::Edge, position: usize ) -> ItemVec {
 	let label = self.edges.get_mut( &edge ).expect( "pre: edge is valid" );
 	label.split_off( position )
     }
@@ -454,43 +462,10 @@ mod test {
 	    (vec!( 0, 3 ), 0),
 	    (vec!( 1, 5 ), 0), // ask for something that's not even there
 	);
-
-	trie.print();
 	
 	for (items, expected) in expectations {
 	    let calculated = trie.query_support( items.clone() );
 	    assert_eq!( calculated, expected, "{}", format_items( items.iter() ) );
 	}
     }
-
-    // Compresses some sequences into a trie. Visits all sequences afterwards.
-    // todo: move up to data base as soon as the sequence iterator is available
-    // todo: this test depends on the iteration order of hash maps, which may be arbitrary. Fix this!
-    // #[test]
-    // fn test_iteration() {
-    // 	let data = vec!(
-    // 	    vec!( 0, 1, 2, 3, 4 ),
-    // 	    vec!( 2, 3, 4 ),
-    // 	    vec!( 0, 3, 4 ),
-    // 	    vec!( 0, 1, 2 ),
-    // 	    vec!( 2, 3, 4 ), // duplicate
-    // 	    vec!( 2, ),
-    // 	);
-    // 	let trie = build_trie_from_complete_data( &data );
-
-    // 	// terminal nodes visited in order
-    // 	let expectations: HashMap<ItemVec, Count> = HashMap::new();
-    // 	expectations.insert( vec!( 0 ), 3 );
-    // 	expectations.insert( vec!( 1, 2 ), 2 );
-    // 	expectations.insert( vec!( 3, 4 ), 1 );
-    // 	expectations.insert( vec!( 3, 4 ), 1 );
-    // 	expectations.insert( vec!( 2 ), 3 );
-    // 	expecatations.insert( vec!( 3, 4 ), 2 );
-
-    // 	for (real_chunk, real_count) in trie.iterate() {
-    // 	    expectations.remove( real_chunk );
-    // 	    assert_eq!( expectations.
-    // 	    assert_eq!( expected_chunk, real_chunk );
-    // 	    assert_eq!( expected_count, *real_count );
-    // 	}
 }
