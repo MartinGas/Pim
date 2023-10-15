@@ -100,6 +100,7 @@ impl Database for LinkedTrieBackedDatabase {
 
 impl LinkedTrieBackedDatabase {
 
+    // \todo rename into new_with_dynamic_order
     /// Initializes the data base with a sample that serves to determine the item order.
     pub fn new <'a, D, T> ( sample: D ) -> LinkedTrieBackedDatabase where
 	D: IntoIterator<Item = T>,
@@ -115,6 +116,16 @@ impl LinkedTrieBackedDatabase {
 	    // singleton_counts: HashMap::new(),
 	    item_map: map_by_score( &frequency_map ),
 	    stop_item: frequency_map.len(), // stop at max_item + 1
+	}
+    }
+
+    /// Initialize the data base with a fixed item order
+    pub fn new_with_static_order( universe: &[Item] ) -> LinkedTrieBackedDatabase {
+	let stop_item = universe.iter().max().map( |item| *item ).unwrap_or( 0 ) + 1;
+	LinkedTrieBackedDatabase {
+	    data: linked_trie::Trie::new(),
+	    item_map: universe.iter().map( |item| (*item, *item) ).collect(),
+	    stop_item
 	}
     }
 

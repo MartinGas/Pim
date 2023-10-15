@@ -429,11 +429,6 @@ fn format_items <'a, I> ( items: I ) -> String where I: Iterator<Item = &'a Item
 #[cfg(test)]
 mod test {
     use super::*;
-    use std::collections::HashSet;
-
-    fn from_vec( elements: Vec<Item> ) -> BitSet {
-	BitSet::from_iter( elements )
-    }
 
     pub fn build_trie_from_complete_data( data: &Vec<Vec<Item>> ) -> Trie {
 	let mut trie = Trie::new();
