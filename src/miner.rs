@@ -5,7 +5,10 @@ use crate::{Database, DataPair, Model};
 
 pub trait Miner {
     fn mine<'a, D, M>( &'a mut self, data: &'a D, model: &'a mut M ) where
-	D: Database + 'a, &'a D: IntoIterator<Item = DataPair>, M: Model + Debug + 'a;
+	D: Database + 'a,
+    &'a D: IntoIterator<Item = DataPair>,
+	M: Model + Debug + 'a,
+	M::Candidate: Debug;
 }
 
 pub struct EmMiner {
@@ -17,6 +20,7 @@ impl Miner for EmMiner {
 	D: Database + 'a,
     &'a D: IntoIterator<Item = DataPair>,
 	M: Model + Debug + 'a,
+	M::Candidate: Debug,
     {
 	let mut loglik = self.step( model, data );
 	let mut last_loglik = f64::NEG_INFINITY;
@@ -31,6 +35,8 @@ impl Miner for EmMiner {
 	    if success {
 		last_loglik = loglik;
 		loglik = self.optimize( model, data, loglik );
+		println!( "Success! Improved loglik {last_loglik:.3} -> {loglik:.3}" );
+		println!( "{model:?}" );
 	    }
 	    iteration += 1;
 	}
@@ -63,18 +69,20 @@ impl EmMiner {
 
 	while loglik > last_loglik {
 	    last_loglik = loglik;
-	    let loglik = self.step( model, data );
+	    loglik = self.step( model, data );
 	}
 	loglik
     }
 
     fn grow<'a, M: Model, D: Database + 'a>( &self, model: &mut M, data: &'a D, loglik: f64 ) -> bool where
-	&'a D: IntoIterator<Item = DataPair>
+	&'a D: IntoIterator<Item = DataPair>,
+	M::Candidate: Debug,
     {
 	let candidates = model.generate_candidates( data );
 	for mut current in candidates {
 	    model.add_candidate( &mut current );
 	    let next_loglik = self.step( model, data );
+	    println!( "Added {current:?} yields {next_loglik:?} over {loglik:?}" );
 	    if next_loglik > loglik {
 		return true;
 	    } else {
