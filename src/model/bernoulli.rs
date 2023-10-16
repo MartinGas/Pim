@@ -2,8 +2,11 @@
 use std::collections::{HashSet, HashMap};
 use bit_set::BitSet;
 
+use crate::DataPair;
+
 use super::*;
 
+#[derive( Debug )]
 /// Bernoulli model with pattern assignments as latent variables and additive and destructive noise
 pub struct BernoulliAssignment {
     // add patterns later
@@ -41,6 +44,8 @@ pub struct UseCount {
 pub struct CandidatePattern {
     pattern: InternalPattern,
     gain_estimate: f64,
+    probability_estimate: f64,
+    realization: Option<Token>,
 }
 
 /// Generates patterns given a view of the model's parameters
@@ -60,7 +65,7 @@ impl Model for BernoulliAssignment {
     type Candidate = CandidatePattern;
     
     fn cover <'a, I> ( &self, data: I ) -> Self::Cover where
-	I: Iterator<Item = (&'a Transaction, Count)>,
+	I: Iterator<Item = DataPair>,
     {
 	let mut cover = UseCount::new( self.universe.clone() );
 	for (transaction, count) in data {
@@ -104,7 +109,7 @@ impl Model for BernoulliAssignment {
 	loglik
     }
 
-    fn generate_candidates <'a, D: Database> ( &'a self, data: &D ) -> Box<dyn Iterator<Item = Self::Candidate> + 'a> {
+    fn generate_candidates <D: Database> ( &self, data: &D ) -> Box<dyn Iterator<Item = Self::Candidate>> {
 	let blocked: HashSet<InternalPattern> = self.patterns.values().cloned().collect();
 	let mut recombinator = PatternRecombinator::new( blocked );
 	// todo: can we avoid the copy?
@@ -115,6 +120,21 @@ impl Model for BernoulliAssignment {
 	recombinator.combine_patterns( &augmented_patterns, data );
 	recombinator.sort_candidates();
 	Box::new( recombinator )
+    }
+
+    fn add_candidate( &mut self, candidate: &mut Self::Candidate ) {
+	let token = self.create_pattern( candidate.pattern.iter().copied() );
+	self.parameters.set_pattern_prob( token, candidate.probability_estimate );
+	candidate.realization = Some( token );
+    }
+
+    fn remove_candidate( &mut self, candidate: &mut Self::Candidate ) {
+	if candidate.realization.is_none() {
+	    panic!( "The candidate was not added before removal" );
+	}
+	let token = candidate.realization.take().unwrap();
+	self.patterns.remove( &token );
+	// will be removed from the parameter set on the next fit
     }
 }
 
@@ -399,8 +419,10 @@ fn vector_to_bitset( items: &Vec<usize> ) -> BitSet {
 }
 
 impl CandidatePattern {
-    fn new( pattern: InternalPattern, gain_estimate: f64 ) -> CandidatePattern {
-	CandidatePattern{ pattern, gain_estimate }
+    fn new( pattern: InternalPattern, probability_estimate: f64, gain_estimate: f64 ) -> CandidatePattern {
+	CandidatePattern{ pattern, probability_estimate, gain_estimate,
+			  realization: None,
+	}
     }    
 }
 
@@ -433,10 +455,10 @@ impl PatternRecombinator {
 		    continue;
 		}
 
-		let estimate = estimate_gain_over_empty_model( &pattern, database );
-		println!( "Combine {left:?} + {right:?} = {pattern:?} (gain {estimate:.3})" );
-		if estimate > 0.0 {
-		    let candidate = CandidatePattern::new( pattern.clone(), estimate );
+		let (probability, gain) = estimate_gain_over_empty_model( &pattern, database );
+		println!( "Combine {left:?} + {right:?} = {pattern:?} (gain {gain:.3})" );
+		if gain > 0.0 {
+		    let candidate = CandidatePattern::new( pattern.clone(), probability, gain );
 		    self.candidate_queue.push( candidate );
 		    self.blocked.insert( pattern );
 		}
@@ -462,7 +484,8 @@ impl Iterator for PatternRecombinator {
     }
 }
 
-fn estimate_gain_over_empty_model <D: Database> ( pattern: &InternalPattern, database: &D ) -> f64 {
+/// Estimates the pattern probability and gain of adding pattern to the empty model.
+fn estimate_gain_over_empty_model <D: Database> ( pattern: &InternalPattern, database: &D ) -> (f64, f64) {
     let n = database.query_support( vec!() );
     let pattern_support = database.query_support( pattern.clone() );
     let pattern_prob = pattern_support as f64 / n as f64;
@@ -477,7 +500,7 @@ fn estimate_gain_over_empty_model <D: Database> ( pattern: &InternalPattern, dat
 	new_loglik - old_loglik
     };
     let item_diff_sum: f64 = pattern.iter().map( calc_add_noise_diff ).sum();
-    pattern_loglik + item_diff_sum
+    (pattern_prob, pattern_loglik + item_diff_sum)
 }
 
 #[cfg(test)]

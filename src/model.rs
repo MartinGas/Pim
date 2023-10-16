@@ -1,5 +1,5 @@
 
-use crate::{Item, Transaction, Count, Database};
+use crate::{Item, Transaction, Count, Database, DataPair};
 
 mod bernoulli;
 
@@ -12,7 +12,7 @@ pub trait Model {
     type Candidate;
 
     /// Covers the data with patterns to obtain the model's stats
-    fn cover <'a, I> ( &self, data: I ) -> Self::Cover where I: Iterator<Item = (&'a Transaction, Count)>;
+    fn cover <I> ( &self, data: I ) -> Self::Cover where I: Iterator<Item = DataPair>;
 
     /// Fits the model parameters to the cover and returns the log likelihood
     fn fit( &mut self, cover: &Self::Cover );
@@ -21,7 +21,13 @@ pub trait Model {
     fn calc_loglik( &self, cover: &Self::Cover ) -> f64;
 
     /// Generates candidates to better explain the provided data base.
-    /// The lifetime of the generator is tied to the lifetime of the model.
-    fn generate_candidates <'a, 'b, D: Database> ( &'a self, data: &'b D ) -> Box<dyn Iterator<Item = Self::Candidate> + 'a>;
+    fn generate_candidates <D: Database> ( &self, data: &D ) -> Box<dyn Iterator<Item = Self::Candidate>>;
+
+    /// Adds a candidate to the model
+    fn add_candidate( &mut self, candidate: &mut Self::Candidate );
+
+    /// Removes a candidate from the model
+    fn remove_candidate( &mut self, candidate: &mut Self::Candidate );
 }
 
+pub use bernoulli::BernoulliAssignment;
