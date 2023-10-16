@@ -18,6 +18,43 @@ pub type Count = u64;
 pub type Item = usize;
 pub type ItemVec = Vec<Item>;
 
+pub trait Database {
+    /// Adds every transaction produced by the iterator to the database
+    fn add <'a, Con> ( &mut self, transactions: Con ) where
+	Con: IntoIterator<Item = &'a ItemVec>;
+
+    /// Returns the support of all transactions containing all items in the query
+    fn query_support( &self, query: Query ) -> Count;
+}
+
+/// Elements of a transactional database.
+pub type DataPair = (Transaction, Count);
+
+/// Stores data as a linked trie with elements ordered by decreasing support.
+pub struct LinkedTrieBackedDatabase {
+    data: linked_trie::Trie,
+    // singleton_counts: HashMap<Item, u64>,
+    item_map: HashMap<Item, Item>,
+    /// special bogus item that is appended to every transaction to mark its end
+    stop_item: Item,
+}
+
+type ItemBuffer = Rc<RefCell<Vec<Item>>>;
+
+pub struct LinkedTrieSequenceIterator<'a> {
+    /// access to the buffered sequence
+    shared_sequence: ItemBuffer,
+    /// internal trie iterator
+    iterator: linked_trie::TrieIterator<'a>,
+    /// special greatest item that marks the end of a sequence
+    stop_item: Item,
+}
+
+struct SharedSequenceBuffer {
+    shared_sequence: ItemBuffer,
+    pop_stack: Vec<usize>,
+}
+
 /// Reads data in FIMI format into a data base
 pub fn read_data( path: &str ) -> Result<LinkedTrieBackedDatabase, String> {
     let path = Path::new( path );
@@ -43,41 +80,6 @@ fn read_transaction( line: &str, splitter: &str ) -> Option<ItemVec> {
     Some( transaction )
 }
 
-pub trait Database {
-    /// Adds every transaction produced by the iterator to the database
-    fn add <'a, Con> ( &mut self, transactions: Con ) where
-	Con: IntoIterator<Item = &'a ItemVec>;
-
-    /// Returns the support of all transactions containing all items in the query
-    fn query_support( &self, query: Query ) -> Count;
-}
-
-/// Stores data as a linked trie with elements ordered by decreasing support.
-pub struct LinkedTrieBackedDatabase {
-    data: linked_trie::Trie,
-    // singleton_counts: HashMap<Item, u64>,
-    item_map: HashMap<Item, Item>,
-    /// special bogus item that is appended to every transaction to mark its end
-    stop_item: Item,
-}
-
-
-type ItemBuffer = Rc<RefCell<Vec<Item>>>;
-
-pub struct LinkedTrieSequenceIterator<'a> {
-    /// access to the buffered sequence
-    shared_sequence: ItemBuffer,
-    /// internal trie iterator
-    iterator: linked_trie::TrieIterator<'a>,
-    /// special greatest item that marks the end of a sequence
-    stop_item: Item,
-}
-
-struct SharedSequenceBuffer {
-    shared_sequence: ItemBuffer,
-    pop_stack: Vec<usize>,
-}
-
 impl Database for LinkedTrieBackedDatabase {
 
     fn add <'a, Con> ( &mut self, transactions: Con ) where
@@ -99,7 +101,7 @@ impl Database for LinkedTrieBackedDatabase {
 }
 
 impl <'a> IntoIterator for &'a LinkedTrieBackedDatabase {
-    type Item = (Transaction, Count);
+    type Item = DataPair;
     type IntoIter = LinkedTrieSequenceIterator<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -138,6 +140,13 @@ impl LinkedTrieBackedDatabase {
 	    item_map: universe.iter().map( |item| (*item, *item) ).collect(),
 	    stop_item
 	}
+    }
+
+    /// Creates a vector that contains all unique items in the data base
+    pub fn create_universe( &self ) -> Vec<Item> {
+	let items: Vec<Item> = self.item_map.keys().copied().collect();
+	items.sort();
+	items
     }
 
     /// Maps items into internal representation and returns the result.
