@@ -144,7 +144,7 @@ impl LinkedTrieBackedDatabase {
 
     /// Creates a vector that contains all unique items in the data base
     pub fn create_universe( &self ) -> Vec<Item> {
-	let items: Vec<Item> = self.item_map.keys().copied().collect();
+	let mut items: Vec<Item> = self.item_map.keys().copied().collect();
 	items.sort();
 	items
     }
