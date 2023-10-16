@@ -98,6 +98,17 @@ impl Database for LinkedTrieBackedDatabase {
     }
 }
 
+impl <'a> IntoIterator for &'a LinkedTrieBackedDatabase {
+    type Item = (Transaction, Count);
+    type IntoIter = LinkedTrieSequenceIterator<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+	let buffer: ItemBuffer = Rc::new( RefCell::new( Vec::new() ));
+	let consumer = SharedSequenceBuffer::new( buffer.clone() );
+	LinkedTrieSequenceIterator::new( self.data.iterate_with_consumer( consumer ), buffer, self.stop_item )
+    }
+}
+
 impl LinkedTrieBackedDatabase {
 
     // \todo rename into new_with_dynamic_order
@@ -129,12 +140,6 @@ impl LinkedTrieBackedDatabase {
 	}
     }
 
-    pub fn iterate_sequences <'a> ( &'a self ) -> LinkedTrieSequenceIterator<'a> {
-	let buffer: ItemBuffer = Rc::new( RefCell::new( Vec::new() ));
-	let consumer = SharedSequenceBuffer::new( buffer.clone() );
-	LinkedTrieSequenceIterator::new( self.data.iterate_with_consumer( consumer ), buffer, self.stop_item )
-    }
-    
     /// Maps items into internal representation and returns the result.
     fn map_into <'a, I> ( &self, items: I ) -> Vec<Item> where I: IntoIterator<Item = &'a Item> {
 	items.into_iter()
@@ -280,7 +285,7 @@ mod test {
 	let mut database = LinkedTrieBackedDatabase::new( &data );
 	database.add( &data );
 
-	for (real_chunk, real_count) in database.iterate_sequences() {
+	for (real_chunk, real_count) in database.into_iter() {
 	    let real_chunk_vector: ItemVec = real_chunk.iter().collect();
 	    let count = expectations.remove( &real_chunk_vector );
 
