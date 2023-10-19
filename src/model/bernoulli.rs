@@ -283,7 +283,7 @@ impl Parameters {
 
     /// Fits the Bernoulli parameter for additive noise of the given item
     pub fn fit_additive_noise_mle( &mut self, item: Item, count_on: Count, count_off: Count ) {
-	let add_prob = count_on as f64 / (count_on + count_off ) as f64;
+	let add_prob = calc_prob( count_on, count_off );
 	self.add_item_noise.insert( item, add_prob );
     }
 
@@ -296,7 +296,7 @@ impl Parameters {
     }
 
     pub fn fit_destructive_noise_mle( &mut self, item: Item, count_on: Count, count_off: Count ) {
-	let kill_prob = count_on as f64 / (count_on + count_off) as f64;
+	let kill_prob = calc_prob( count_on, count_off );
 	self.kill_item_noise.insert( item, kill_prob );
     }
 
@@ -342,6 +342,11 @@ impl Parameters {
 	let prob = self.get_destructive_noise( item );
 	calc_loglik( prob, on_count, off_count )
     }
+}
+
+fn calc_prob( on_count: Count, off_count: Count ) -> f64 {
+    if on_count == 0 { 0.0 }
+    else { on_count as f64 / off_count as f64 }
 }
 
 /// Calculates the log likelihood of a number of Bernoulli experiments
@@ -456,7 +461,7 @@ impl PatternRecombinator {
 		}
 
 		let (probability, gain) = estimate_gain_over_empty_model( &pattern, database );
-		println!( "Combine {left:?} + {right:?} = {pattern:?} (gain {gain:.3})" );
+		// println!( "Combine {left:?} + {right:?} = {pattern:?} (gain {gain:.3})" );
 		if gain > 0.0 {
 		    let candidate = CandidatePattern::new( pattern.clone(), probability, gain );
 		    self.candidate_queue.push( candidate );
