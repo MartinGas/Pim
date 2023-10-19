@@ -9,7 +9,8 @@ pub use miner::Miner;
 
 fn main() -> Result<(), String>{
 
-    let database = data::read_data( "./data/census/census.fimi" )?;
+    let database = data::read_data( "./data/penguins/penguins.fimi" )?;
+    // let database = data::read_data( "./data/census/census.fimi" )?;
     let universe: Vec<Item> = database.create_universe();
     let mut model = model::BernoulliAssignment::new( universe.iter() );
     let mut miner = miner::EmMiner::new( 10 );

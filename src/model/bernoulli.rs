@@ -24,8 +24,12 @@ pub struct BernoulliAssignment {
 struct Parameters {
     /// Bernoulli parameters for non-covered items
     add_item_noise: HashMap<Item, f64>,
+    /// bias observations for additive noise (positive, negative)
+    add_item_bias: [f64; 2];
     /// Bernoulli parameters for covered items
     kill_item_noise: HashMap<Item, f64>,
+    /// bias observations for destructive noise
+    kill_item_bias: [f64
     /// Bernoulli parameters for patterns
     pattern_prob: HashMap<Token, f64>,
 }
@@ -197,19 +201,12 @@ impl BernoulliAssignment {
 	let mut item_to_pattern: HashMap<Item, HashSet<Token>> = HashMap::new();
 	for token in self.patterns.keys() {
 	    let pattern = self.get_pattern( *token ).expect( "patterns are internally consistent" );
-	    let pattern_cost = self.parameters.calc_pattern_loglik( *token, 1, 0 );
-	    let kill_cost: f64 = pattern.iter()
-		.filter( |item| !t.contains( **item ))
-		.map( |item| self.parameters.calc_destructive_loglik( *item, 1, 0 )).sum();
-	    let add_savings: f64 = pattern.iter()
-		.filter( |item| t.contains( **item ))
-		.map( |item| self.parameters.calc_additive_loglik( *item, 1, 0 )).sum();
-	    let total = pattern_cost + kill_cost - add_savings;
-	    if !( total > 0.0 ) {
+	    let gain = self.calc_empty_cover_gain( t, *token );
+	    if !( gain > 0.0 ) {
 		continue;
 	    }
 
-	    gain_per_pattern.insert( *token, pattern_cost + kill_cost - add_savings );
+	    gain_per_pattern.insert( *token, gain );
 	    cover_candidates.insert( *token );
 	    for item in pattern {
 		item_to_pattern.entry( *item )
@@ -222,6 +219,11 @@ impl BernoulliAssignment {
 	let mut cover = Transaction::new();
 	let mut covering: Vec<PatternPair> = Vec::new();
 	while !cover_candidates.is_empty() {
+	    for (token, gain) in &gain_per_pattern {
+		let pat = self.patterns.get( token ).unwrap();
+		println!( "{pat:?} gains {gain:.3}" );
+	    }
+
 	    // find the best candidate
 	    let best_entry = gain_per_pattern.iter().max_by( |left_entry, right_entry| left_entry.1.partial_cmp( right_entry.1 ).expect( "not nan" ) )
 		.expect( "there are candidates" );
@@ -260,6 +262,25 @@ impl BernoulliAssignment {
 	    gain_per_pattern.remove( &best_token );
 	}
 	covering
+    }
+
+    /// Calculates the gain of covering a transaction with the pattern corresponding to token
+    fn calc_empty_cover_gain( &self, transaction: &Transaction, token: Token ) -> f64 {
+	let pattern = self.patterns.get( &token ).expect( "valid token refers to a pattern" );
+	let pattern_cost = self.parameters.calc_pattern_loglik( token, 1, 0 );
+	let kill_cost: f64 = pattern.iter()
+	    .filter( |item| !transaction.contains( **item ))
+	    .map( |item| self.parameters.calc_destructive_loglik( *item, 1, 0 )).sum();
+	let add_savings: f64 = pattern.iter()
+	    .filter( |item| transaction.contains( **item ))
+	    .map( |item| self.parameters.calc_additive_loglik( *item, 1, 0 )).sum();
+
+	println!( "Initial gain {pattern:?} = {pattern_cost:.3} + {kill_cost:.3} - {add_savings:.3}" );
+
+	// question: how do we deal with "infinite" gains? Are they even infinite?
+	// Occurs if event with probability 0 happens e.g. item with noise prob 0 occurs
+
+	pattern_cost + kill_cost - add_savings
     }
 }
 
@@ -309,7 +330,7 @@ impl Parameters {
     }
 
     pub fn fit_pattern_prob_mle( &mut self, pattern: Token, count_on: Count, count_off: Count ) {
-	let prob = count_on as f64 / (count_on + count_off) as f64;
+	let prob = calc_prob( count_on, count_off );
 	self.pattern_prob.insert( pattern, prob );
     }
 
@@ -345,8 +366,9 @@ impl Parameters {
 }
 
 fn calc_prob( on_count: Count, off_count: Count ) -> f64 {
-    if on_count == 0 { 0.0 }
-    else { on_count as f64 / off_count as f64 }
+    let denominator = on_count + off_count;
+    if denominator == 0 { 0.0 }
+    else { on_count as f64 / denominator as f64 }
 }
 
 /// Calculates the log likelihood of a number of Bernoulli experiments

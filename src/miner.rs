@@ -22,17 +22,23 @@ impl Miner for EmMiner {
 	M: Model + Debug + 'a,
 	M::Candidate: Debug,
     {
+	println!( "Initializing" );
 	let mut loglik = self.step( model, data );
 	let mut last_loglik = f64::NEG_INFINITY;
 	let mut iteration = 0;
 	let delta = 0.00001;
 	
+	println!( "Current model" );
+	println!( "{model:?}" );
+
 	while loglik > last_loglik + delta && iteration < self.max_iterations {
-	    println!( "Model loglik {loglik:.4}" );
+	    println!( "Current model" );
 	    println!( "{model:?}" );
 
+	    println!( "Candidate search" );
 	    let success = self.grow( model, data, loglik );
 	    if success {
+		println!( "Reoptimizaton" );
 		last_loglik = loglik;
 		loglik = self.optimize( model, data, loglik );
 		println!( "Success! Improved loglik {last_loglik:.3} -> {loglik:.3}" );
@@ -40,6 +46,7 @@ impl Miner for EmMiner {
 	    }
 	    iteration += 1;
 	}
+	println!( "Mining finished" );
     }
 }
 
