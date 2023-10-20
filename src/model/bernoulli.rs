@@ -1,6 +1,7 @@
 
 use std::collections::{HashSet, HashMap};
 use bit_set::BitSet;
+use statrs::distribution::{Beta, Continuous};
 
 use crate::DataPair;
 
@@ -24,10 +25,16 @@ pub struct BernoulliAssignment {
 struct Parameters {
     /// Bernoulli parameters for non-covered items
     add_item_noise: HashMap<Item, f64>,
+    /// prior distribution over additive noise parameter
+    add_item_prior: Beta,
     /// Bernoulli parameters for covered items
     kill_item_noise: HashMap<Item, f64>,
+    /// prior distribution over destructive noise parameter
+    kill_item_prior: Beta,
     /// Bernoulli parameters for patterns
     pattern_prob: HashMap<Token, f64>,
+    /// prior distribution over pattern parameter
+    pattern_prior: Beta,
 }
 
 #[derive( Debug )]
@@ -197,19 +204,12 @@ impl BernoulliAssignment {
 	let mut item_to_pattern: HashMap<Item, HashSet<Token>> = HashMap::new();
 	for token in self.patterns.keys() {
 	    let pattern = self.get_pattern( *token ).expect( "patterns are internally consistent" );
-	    let pattern_cost = self.parameters.calc_pattern_loglik( *token, 1, 0 );
-	    let kill_cost: f64 = pattern.iter()
-		.filter( |item| !t.contains( **item ))
-		.map( |item| self.parameters.calc_destructive_loglik( *item, 1, 0 )).sum();
-	    let add_savings: f64 = pattern.iter()
-		.filter( |item| t.contains( **item ))
-		.map( |item| self.parameters.calc_additive_loglik( *item, 1, 0 )).sum();
-	    let total = pattern_cost + kill_cost - add_savings;
-	    if !( total > 0.0 ) {
+	    let gain = self.calc_empty_cover_gain( t, *token );
+	    if !( gain > 0.0 ) {
 		continue;
 	    }
 
-	    gain_per_pattern.insert( *token, pattern_cost + kill_cost - add_savings );
+	    gain_per_pattern.insert( *token, gain );
 	    cover_candidates.insert( *token );
 	    for item in pattern {
 		item_to_pattern.entry( *item )
@@ -222,6 +222,11 @@ impl BernoulliAssignment {
 	let mut cover = Transaction::new();
 	let mut covering: Vec<PatternPair> = Vec::new();
 	while !cover_candidates.is_empty() {
+	    for (token, gain) in &gain_per_pattern {
+		let pat = self.patterns.get( token ).unwrap();
+		println!( "{pat:?} gains {gain:.3}" );
+	    }
+
 	    // find the best candidate
 	    let best_entry = gain_per_pattern.iter().max_by( |left_entry, right_entry| left_entry.1.partial_cmp( right_entry.1 ).expect( "not nan" ) )
 		.expect( "there are candidates" );
@@ -261,18 +266,53 @@ impl BernoulliAssignment {
 	}
 	covering
     }
+
+    /// Calculates the gain of covering a transaction with the pattern corresponding to token
+    fn calc_empty_cover_gain( &self, transaction: &Transaction, token: Token ) -> f64 {
+	let pattern = self.patterns.get( &token ).expect( "valid token refers to a pattern" );
+	let pattern_cost = self.parameters.calc_pattern_loglik( token, 1, 0 );
+	let kill_cost: f64 = pattern.iter()
+	    .filter( |item| !transaction.contains( **item ))
+	    .map( |item| self.parameters.calc_destructive_loglik( *item, 1, 0 )).sum();
+	let add_savings: f64 = pattern.iter()
+	    .filter( |item| transaction.contains( **item ))
+	    .map( |item| self.parameters.calc_additive_loglik( *item, 1, 0 )).sum();
+
+	println!( "Initial gain {pattern:?} = {pattern_cost:.3} + {kill_cost:.3} - {add_savings:.3}" );
+
+	// question: how do we deal with "infinite" gains? Are they even infinite?
+	// Occurs if event with probability 0 happens e.g. item with noise prob 0 occurs
+
+	pattern_cost + kill_cost - add_savings
+    }
 }
 
 impl Parameters {
-    
+
+    /// Constructor for model without bias
     pub fn new() -> Parameters {
 	Parameters {
 	    add_item_noise: HashMap::new(),
 	    kill_item_noise: HashMap::new(),
 	    pattern_prob: HashMap::new(),
+	    // initialize with uniform prior
+	    add_item_prior: Beta::new( 1.0, 1.0 ).unwrap(),
+	    kill_item_prior: Beta::new( 1.0, 1.0 ).unwrap(),
+	    pattern_prior: Beta::new( 1.0, 1.0 ).unwrap(),
 	}
     }
 
+    pub fn set_additive_bias( &mut self, positive_bias: Count, negative_bias: Count ) {
+	// Shape parameters >= 1.0 can be interpreted as prior "pseudo-samples"
+	let a_shape = positive_bias as f64 + 1.0;
+	let b_shape = negative_bias as f64 + 1.0;
+	self.add_item_prior = Beta::new( a_shape, b_shape ).expect( "provided counts are non-negative" );
+    }
+
+    pub fn get_additive_bias( &self ) -> (Count, Count) {
+	(self.add_item_prior.shape_a() as Count - 1, self.add_item_prior.shape_b() as Count - 1)
+    }
+    
     pub fn get_additive_noise( &self, item: Item ) -> f64 {
 	self.add_item_noise.get( &item ).map_or( 0.0, |p| *p )
     }
@@ -287,6 +327,35 @@ impl Parameters {
 	self.add_item_noise.insert( item, add_prob );
     }
 
+    /// Sets the Bernoulli additive noise parameter to its MAP estimate
+    pub fn fit_additive_noise_map( &mut self, item: Item, count_on: Count, count_off: Count ) {
+	let (bias_on, bias_off) = self.get_additive_bias();
+	let add_prob = calc_prob( count_on + bias_on, count_off + bias_off );
+	println!( "fit additive {item}  {count_on} + {bias_on} : {count_off} + {bias_off}" );
+	self.add_item_noise.insert( item, add_prob );
+    }
+
+    pub fn calc_additive_loglik( &self, item: Item, on_count: Count, off_count: Count ) -> f64 {
+	let prob = self.get_additive_noise( item );
+	calc_loglik( prob, on_count, off_count )
+    }
+
+    /// Calculates the log of the prior probability of additive noise parameter for the given item
+    pub fn calc_additive_logprior( &self, item: Item ) -> f64 {
+	let prob = self.get_additive_noise( item );
+	self.add_item_prior.ln_pdf( prob ) / f64::ln( 2.0 )
+    }
+
+    pub fn set_destructive_bias( &mut self, positive_bias: Count, negative_bias: Count ) {
+	let a_shape = positive_bias as f64 + 1.0;
+	let b_shape = negative_bias as f64 + 1.0;
+	self.kill_item_prior = Beta::new( a_shape, b_shape ).expect( "provide positive shapes" );
+    }
+
+    pub fn get_destructive_bias( &self ) -> (Count, Count) {
+	(self.kill_item_prior.shape_a() as Count - 1, self.kill_item_prior.shape_b() as Count - 1)
+    }
+
     pub fn get_destructive_noise( &self, item: Item ) -> f64 {
 	self.kill_item_noise.get( &item ).map_or( 0.0, |p| *p )
     }
@@ -299,6 +368,32 @@ impl Parameters {
 	let kill_prob = calc_prob( count_on, count_off );
 	self.kill_item_noise.insert( item, kill_prob );
     }
+    
+    pub fn fit_destructive_noise_map( &mut self, item: Item, count_on: Count, count_off: Count ) {
+	let (bias_on, bias_off) = self.get_destructive_bias();
+	let kill_prob = calc_prob( count_on + bias_on, count_off + bias_off );
+	self.kill_item_noise.insert( item, kill_prob );
+    }
+
+    pub fn calc_destructive_loglik( &self, item: Item, on_count: Count, off_count: Count ) -> f64 {
+	let prob = self.get_destructive_noise( item );
+	calc_loglik( prob, on_count, off_count )
+    }
+
+    pub fn calc_destructive_logprior( &self, item: Item ) -> f64 {
+	let prob = self.get_destructive_noise( item );
+	self.kill_item_prior.ln_pdf( prob ) / f64::ln( 2.0 )
+    }
+
+    pub fn set_pattern_bias( &mut self, positive_bias: Count, negative_bias: Count ) {
+	let shape_a = positive_bias as f64 + 1.0;
+	let shape_b = positive_bias as f64 + 1.0;
+	self.pattern_prior = Beta::new( shape_a, shape_b ).expect( "positive shapes" );
+    }
+
+    pub fn get_pattern_bias( &self ) -> (Count, Count) {
+	(self.pattern_prior.shape_a() as Count - 1, self.pattern_prior.shape_b() as Count - 1)
+    }
 
     pub fn get_pattern_prob( &self, pattern: Token ) -> f64 {
 	self.pattern_prob.get( &pattern ).map_or( 0.0, |p| *p )
@@ -309,13 +404,14 @@ impl Parameters {
     }
 
     pub fn fit_pattern_prob_mle( &mut self, pattern: Token, count_on: Count, count_off: Count ) {
-	let prob = count_on as f64 / (count_on + count_off) as f64;
+	let prob = calc_prob( count_on, count_off );
 	self.pattern_prob.insert( pattern, prob );
     }
 
-    pub fn get_pattern_cost <It> (&self, tokens: It) -> f64 where It: Iterator<Item = Token> {
-	tokens.map( |t| self.get_pattern_prob( t ))
-	    .map( |p| log( p )).sum()
+    pub fn fit_pattern_prob_map( &mut self, pattern: Token, count_on: Count, count_off: Count ) {
+	let (bias_on, bias_off) = self.get_pattern_bias();
+	let pattern_prob = calc_prob( count_on + bias_on, count_off + bias_off );
+	self.pattern_prob.insert( pattern, pattern_prob );
     }
 
     pub fn calc_pattern_loglik( &self, token: Token, on_count: Count, off_count: Count ) -> f64 {
@@ -323,30 +419,16 @@ impl Parameters {
 	calc_loglik( prob, on_count, off_count )
     }
 
-    pub fn get_additive_cost <It> (&self, items: It) -> f64 where It: Iterator<Item = Item> {
-	items.map( |i| self.get_additive_noise( i ))
-	    .map( |p| log( p )).sum()
-    }
-
-    pub fn calc_additive_loglik( &self, item: Item, on_count: Count, off_count: Count ) -> f64 {
-	let prob = self.get_additive_noise( item );
-	calc_loglik( prob, on_count, off_count )
-    }
-
-    pub fn get_destructive_cost <It> (&self, items: It) -> f64 where It: Iterator<Item = Item> {
-	items.map( |i| self.get_destructive_noise( i ))
-	    .map( |p| log( p )).sum()
-    }
-
-    pub fn calc_destructive_loglik( &self, item: Item, on_count: Count, off_count: Count ) -> f64 {
-	let prob = self.get_destructive_noise( item );
-	calc_loglik( prob, on_count, off_count )
+    pub fn calc_pattern_logprior( &self, token: Token ) -> f64 {
+	let prob = self.get_pattern_prob( token );
+	self.pattern_prior.ln_pdf( prob ) / f64::ln( 2.0 )
     }
 }
 
 fn calc_prob( on_count: Count, off_count: Count ) -> f64 {
-    if on_count == 0 { 0.0 }
-    else { on_count as f64 / off_count as f64 }
+    let denominator = on_count + off_count;
+    if denominator == 0 { 0.0 }
+    else { on_count as f64 / denominator as f64 }
 }
 
 /// Calculates the log likelihood of a number of Bernoulli experiments
@@ -545,7 +627,7 @@ mod test {
 	    .collect();
 
 	let model = BernoulliAssignment::new( &universe );
-	let cover: UseCount = model.cover( data.iter().map( |t| (t, 1) ) ); // make a vector of transaction a data base for testing
+	let cover: UseCount = model.cover( data.iter().map( |t| (t.clone(), 1) ) ); // make a vector of transaction a data base for testing
 
 	assert_eq!( cover.number_transactions, 5 );
 	let add_count_expect = vec!( 0, 5, 4, 3, 2, 1 );
@@ -855,5 +937,56 @@ mod test {
 	    // candidate patterns contain items in order
 	    assert_eq!( expected, &calculated.pattern );
 	}
+    }
+
+    #[test]
+    /// Check if parameter fit is correct with prior
+    fn test_bias_fit() {
+	let mut param = Parameters::new();
+	let (noise_plus_bias, noise_min_bias, noise_total_bias) = (1, 2, 3);
+	let (pattern_plus_bias, pattern_min_bias, pattern_total_bias) = (1, 1, 2);
+	param.set_additive_bias( noise_plus_bias, noise_min_bias );
+	param.set_destructive_bias( noise_plus_bias, noise_min_bias );
+	param.set_pattern_bias( pattern_plus_bias, pattern_min_bias );
+
+	param.fit_additive_noise_map( 0, 2, 1 ); // 2/3
+	param.fit_destructive_noise_map( 0, 1, 2  ); // 1/3
+	param.fit_additive_noise_map( 1, 6, 0 ); // 6/6
+	param.fit_destructive_noise_map( 1, 0, 0); // 0/0p
+	param.fit_pattern_prob_map( 0, 5, 1 ); // 5/6
+	
+	assert_approx!( param.get_additive_noise( 0 ), (2 + noise_plus_bias) as f64 / (3 + noise_total_bias) as f64, 0.01 );
+	assert_approx!( param.get_destructive_noise( 0 ), (1 + noise_plus_bias) as f64 / (3 + noise_total_bias) as f64, 0.01 );
+	assert_approx!( param.get_additive_noise( 1 ), (6 + noise_plus_bias) as f64 / (6 + noise_total_bias) as f64, 0.01 );
+	assert_approx!( param.get_destructive_noise( 1 ), (0 + noise_plus_bias) as f64 / (0 + noise_total_bias) as f64, 0.01 );
+	assert_approx!( param.get_pattern_prob( 0 ), (5 + pattern_plus_bias) as f64 / (6 + pattern_total_bias) as f64, 0.01 );
+    }
+
+    #[test]
+    /// Test the joint distributions for counts and parameters
+    fn test_log_prior() {
+	let mut param = Parameters::new();
+	let (noise_plus_bias, noise_min_bias) = (1, 2);
+	let (pattern_plus_bias, pattern_min_bias) = (1, 1);
+	param.set_additive_bias( noise_plus_bias, noise_min_bias );
+	param.set_destructive_bias( noise_plus_bias, noise_min_bias );
+	param.set_pattern_bias( pattern_plus_bias, pattern_min_bias );
+
+	let additive_noise_0 = 0.3;
+	let destructive_noise_0 = 0.001;
+	let additive_noise_1 = 0.001;
+	let destructive_noise_1 = 0.999;
+	let pattern_prob = 0.75;
+	param.set_additive_noise( 0, additive_noise_0 );
+	param.set_destructive_noise( 0, destructive_noise_0 );
+	param.set_additive_noise( 1, additive_noise_1 );
+	param.set_destructive_noise( 1, destructive_noise_1 );
+	param.set_pattern_prob( 0, pattern_prob );
+
+	assert_approx!( param.calc_additive_logprior( 0 ), f64::log2( 1.764 ), 0.01 );
+	assert_approx!( param.calc_destructive_logprior( 0 ), f64::log2( 0.012 ), 0.01 );
+	assert_approx!( param.calc_additive_logprior( 1 ), f64::log2( 0.012 ), 0.01 );
+	assert_approx!( param.calc_destructive_logprior( 1 ), f64::log2( 0.000012 ), 0.01 );
+	assert_approx!( param.calc_pattern_logprior( 0 ), f64::log2( 1.125 ), 0.01 );
     }
 }
