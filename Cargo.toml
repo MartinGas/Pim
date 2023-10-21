@@ -3,6 +3,12 @@ name = "trans_mine"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "transmine"
+version = "0.1.0"
+path = "src/lib.rs"
+crate-type = ["lib"]
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]

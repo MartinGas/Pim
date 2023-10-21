@@ -1,15 +1,17 @@
 
-mod data;
-mod model;
-mod miner;
+// mod data;
+// mod model;
+// mod miner;
 
-pub use data::{Database, DataPair, Item, Transaction, Count};
-pub use model::Model;
-pub use miner::Miner;
+// use transmine::data::{self, DataPair, Item, Transaction, Count};
+// use transmine::model::Model;
+// use transmine::miner::Miner;
+use transmine::*;
+use data::read_data;
 
 fn main() -> Result<(), String>{
 
-    let database = data::read_data( "./data/penguins/penguins.fimi" )?;
+    let database = read_data( "./data/penguins/penguins.fimi" )?;
     // let database = data::read_data( "./data/census/census.fimi" )?;
     let universe: Vec<Item> = database.create_universe();
     let mut model = model::BernoulliAssignment::new( universe.iter() );
