@@ -1,14 +1,15 @@
 
 use std::fmt::Debug;
 
-use crate::{Database, DataPair, Model};
+use crate::*;
+
 
 pub trait Miner {
     fn mine<'a, D, M>( &'a mut self, data: &'a D, model: &'a mut M ) where
 	D: Database + 'a,
     &'a D: IntoIterator<Item = DataPair>,
-	M: Model + Debug + 'a,
-	M::Candidate: Debug;
+	M: Model + Loggable + 'a,
+	M::Candidate: Loggable;
 }
 
 pub struct EmMiner {
@@ -19,34 +20,20 @@ impl Miner for EmMiner {
     fn mine<'a, D, M>( &'a mut self, data: &'a D, model: &'a mut M ) where
 	D: Database + 'a,
     &'a D: IntoIterator<Item = DataPair>,
-	M: Model + Debug + 'a,
-	M::Candidate: Debug,
+	M: Model + Loggable + 'a,
+	M::Candidate: Loggable,
     {
-	println!( "Initializing" );
-	let mut loglik = self.step( model, data );
 	let mut last_loglik = f64::NEG_INFINITY;
+	let mut loglik = self.initialize( model, data );
 	let mut iteration = 0;
-	let delta = 0.00001;
-	
-	println!( "Current model" );
-	println!( "{model:?}" );
-
-	while loglik > last_loglik + delta && iteration < self.max_iterations {
-	    println!( "Current model" );
-	    println!( "{model:?}" );
-
-	    println!( "Candidate search" );
-	    let success = self.grow( model, data, loglik );
-	    if success {
-		println!( "Reoptimizaton" );
-		last_loglik = loglik;
-		loglik = self.optimize( model, data, loglik );
-		println!( "Success! Improved loglik {last_loglik:.3} -> {loglik:.3}" );
-		println!( "{model:?}" );
-	    }
+	while last_loglik < loglik {
 	    iteration += 1;
+	    let iteration_span = info_span!( "iteration", number = iteration );
+	    let last_loglik = loglik;
+	    loglik = self.iterate( model, data, loglik );
+
+	    info!( "Likelihood changed from {last_loglik:.3} to {loglik:.3}" );
 	}
-	println!( "Mining finished" );
     }
 }
 
@@ -56,6 +43,36 @@ impl EmMiner {
     pub fn new( max_iterations: u64 ) -> EmMiner {
 	EmMiner {
 	    max_iterations,
+	}
+    }
+
+    fn initialize<'a, M: Model, D: Database>( &self, model: &mut M, data: &'a D ) -> f64 where
+	D: Database + 'a,
+    &'a D: IntoIterator<Item = DataPair>,
+	M: Model + Loggable + 'a,
+    {
+	let init_span = info_span!( "initialization" );
+	let mut loglik = self.step( model, data );
+
+	model.log( "initial model", Level::DEBUG );
+	info!( "initial score {}", loglik );
+
+	loglik
+    }
+
+    fn iterate<'a, M: Model, D: Database>( &self, model: &mut M, data: &'a D, loglik: f64 ) -> f64 where
+	D: Database + 'a,
+    &'a D: IntoIterator<Item = DataPair>,
+	M: Model + Loggable + 'a,
+    M::Candidate: Loggable,
+    {
+	let success = self.grow( model, data, loglik );
+	if success {
+	    debug!( "Candidate accepted" );
+	    
+	    self.optimize( model, data, loglik )
+	} else {
+	    loglik
 	}
     }
 
@@ -83,13 +100,17 @@ impl EmMiner {
 
     fn grow<'a, M: Model, D: Database + 'a>( &self, model: &mut M, data: &'a D, loglik: f64 ) -> bool where
 	&'a D: IntoIterator<Item = DataPair>,
-	M::Candidate: Debug,
+	M::Candidate: Loggable,
     {
 	let candidates = model.generate_candidates( data );
 	for mut current in candidates {
+	    current.log( "adding candidate", Level::DEBUG );
+	    
 	    model.add_candidate( &mut current );
 	    let next_loglik = self.step( model, data );
-	    println!( "Added {current:?} yields {next_loglik:?} over {loglik:?}" );
+
+	    debug!( "Candidate yields {:.3} over {:.3}", next_loglik, loglik );
+
 	    if next_loglik > loglik {
 		return true;
 	    } else {
