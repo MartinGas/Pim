@@ -1,4 +1,6 @@
+#+STARTUP: overview
 
+I wonder: can we normalize \(p(t,a) / Z\) i.e. find the probability of \(t\)? I get the feeling we're just missing Binomial coefficients.
 
 I wonder: can we normalize \(p(t,a) / Z\) i.e. find the probability of \(t\)? I get the feeling we're just missing Binomial coefficients.
 

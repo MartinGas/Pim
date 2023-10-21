@@ -1,6 +1,7 @@
 
 use std::collections::{HashSet, HashMap};
 use bit_set::BitSet;
+use statrs::distribution::{Beta, Continuous};
 
 use crate::DataPair;
 
@@ -19,19 +20,21 @@ pub struct BernoulliAssignment {
     token_count: usize,
 }
 
-#[derive( Debug )]
+#[derive( Debug, Clone )]
 /// Manages the parameters of the Bernoulli model.
 struct Parameters {
     /// Bernoulli parameters for non-covered items
     add_item_noise: HashMap<Item, f64>,
-    /// bias observations for additive noise (positive, negative)
-    add_item_bias: [f64; 2];
+    /// prior distribution over additive noise parameter
+    add_item_prior: Beta,
     /// Bernoulli parameters for covered items
     kill_item_noise: HashMap<Item, f64>,
-    /// bias observations for destructive noise
-    kill_item_bias: [f64
+    /// prior distribution over destructive noise parameter
+    kill_item_prior: Beta,
     /// Bernoulli parameters for patterns
     pattern_prob: HashMap<Token, f64>,
+    /// prior distribution over pattern parameter
+    pattern_prior: Beta,
 }
 
 #[derive( Debug )]
@@ -58,6 +61,8 @@ pub struct PatternRecombinator {
     candidate_queue: Vec<CandidatePattern>,
     // Stores patterns that may not be candidates
     blocked: HashSet<InternalPattern>,
+    // bias and current parameters
+    parameters: Parameters,
 }
 
 // representation of the pattern's contents
@@ -81,24 +86,21 @@ impl Model for BernoulliAssignment {
 
     fn fit( &mut self, cover: &Self::Cover ) {
 	// old parameters are invalid
-	self.parameters = Parameters::new();
-	// self.add_item_noise.clear();
-	// self.kill_item_noise.clear();
-	// self.pattern_prob.clear();
+	self.parameters.clear();
 	
 	let n = cover.number_transactions;
 	for item in &self.universe {
 	    let occur_not_cover_count = cover.get_item_cover_count( *item, true, false );
 	    let not_occur_not_cover_count = cover.get_item_cover_count( *item, false, false );
-	    self.parameters.fit_additive_noise_mle( *item, occur_not_cover_count, not_occur_not_cover_count );
+	    self.parameters.fit_additive_noise_map( *item, occur_not_cover_count, not_occur_not_cover_count );
 
 	    let not_occur_cover_count = cover.get_item_cover_count( *item, false, true );
 	    let occur_cover_count = cover.get_item_cover_count( *item, true, true );
-	    self.parameters.fit_destructive_noise_mle( *item, not_occur_cover_count, occur_cover_count );
+	    self.parameters.fit_destructive_noise_map( *item, not_occur_cover_count, occur_cover_count );
 	}
 	for token in self.patterns.keys() {
 	    let usage = cover.get_pattern_count( *token );
-	    self.parameters.fit_pattern_prob_mle( *token, usage, n - usage );
+	    self.parameters.fit_pattern_prob_map( *token, usage, n - usage );
 	}
     }
 
@@ -115,7 +117,7 @@ impl Model for BernoulliAssignment {
 
     fn generate_candidates <D: Database> ( &self, data: &D ) -> Box<dyn Iterator<Item = Self::Candidate>> {
 	let blocked: HashSet<InternalPattern> = self.patterns.values().cloned().collect();
-	let mut recombinator = PatternRecombinator::new( blocked );
+	let mut recombinator = PatternRecombinator::new( blocked, &self.parameters );
 	// todo: can we avoid the copy?
 	let mut augmented_patterns: Vec<InternalPattern> = self.patterns.values().cloned().collect();
 	for item in &self.universe { // add singletons as patterns
@@ -145,13 +147,22 @@ impl Model for BernoulliAssignment {
 impl BernoulliAssignment {
 
     pub fn new <'a, U> ( universe: U ) -> BernoulliAssignment where U: IntoIterator<Item = &'a Item> {
+	// set default bias
+	let mut initial = Parameters::new();
+	// favor not using noise
+	initial.set_additive_bias( 1, 2 );
+	initial.set_destructive_bias( 1, 2 );
+	// patterns are unbiased so we can get rid of them
+	// initial.set_pattern_bias( 1, 1 );
+	println!( "{initial:?}" );
+
 	BernoulliAssignment{
 	    // add_item_noise: HashMap::new(),
 	    // kill_item_noise: HashMap::new(),
 	    // pattern_prob: HashMap::new(),
 	    universe: universe.into_iter().map( |itm| *itm ).collect(),
 	    patterns: HashMap::new(),
-	    parameters: Parameters::new(),
+	    parameters: initial,
 	    token_count: 0,
 	}
     }
@@ -221,7 +232,7 @@ impl BernoulliAssignment {
 	while !cover_candidates.is_empty() {
 	    for (token, gain) in &gain_per_pattern {
 		let pat = self.patterns.get( token ).unwrap();
-		println!( "{pat:?} gains {gain:.3}" );
+		// println!( "{pat:?} gains {gain:.3}" );
 	    }
 
 	    // find the best candidate
@@ -267,6 +278,7 @@ impl BernoulliAssignment {
     /// Calculates the gain of covering a transaction with the pattern corresponding to token
     fn calc_empty_cover_gain( &self, transaction: &Transaction, token: Token ) -> f64 {
 	let pattern = self.patterns.get( &token ).expect( "valid token refers to a pattern" );
+	// we consider the cost given fixed parameters, so the prior does not matter
 	let pattern_cost = self.parameters.calc_pattern_loglik( token, 1, 0 );
 	let kill_cost: f64 = pattern.iter()
 	    .filter( |item| !transaction.contains( **item ))
@@ -275,25 +287,42 @@ impl BernoulliAssignment {
 	    .filter( |item| transaction.contains( **item ))
 	    .map( |item| self.parameters.calc_additive_loglik( *item, 1, 0 )).sum();
 
-	println!( "Initial gain {pattern:?} = {pattern_cost:.3} + {kill_cost:.3} - {add_savings:.3}" );
+	// println!( "Initial gain {pattern:?} = {pattern_cost:.3} + {kill_cost:.3} - {add_savings:.3}" );
 
 	// question: how do we deal with "infinite" gains? Are they even infinite?
 	// Occurs if event with probability 0 happens e.g. item with noise prob 0 occurs
+	// should not happen any more with prior over parameters
 
 	pattern_cost + kill_cost - add_savings
     }
 }
 
 impl Parameters {
-    
+
+    /// Constructor for model without bias
     pub fn new() -> Parameters {
 	Parameters {
 	    add_item_noise: HashMap::new(),
 	    kill_item_noise: HashMap::new(),
 	    pattern_prob: HashMap::new(),
+	    // initialize with uniform prior
+	    add_item_prior: Beta::new( 1.0, 1.0 ).unwrap(),
+	    kill_item_prior: Beta::new( 1.0, 1.0 ).unwrap(),
+	    pattern_prior: Beta::new( 1.0, 1.0 ).unwrap(),
 	}
     }
 
+    pub fn set_additive_bias( &mut self, positive_bias: Count, negative_bias: Count ) {
+	// Shape parameters >= 1.0 can be interpreted as prior "pseudo-samples"
+	let a_shape = positive_bias as f64 + 1.0;
+	let b_shape = negative_bias as f64 + 1.0;
+	self.add_item_prior = Beta::new( a_shape, b_shape ).expect( "provided counts are non-negative" );
+    }
+
+    pub fn get_additive_bias( &self ) -> (Count, Count) {
+	(self.add_item_prior.shape_a() as Count - 1, self.add_item_prior.shape_b() as Count - 1)
+    }
+    
     pub fn get_additive_noise( &self, item: Item ) -> f64 {
 	self.add_item_noise.get( &item ).map_or( 0.0, |p| *p )
     }
@@ -308,6 +337,34 @@ impl Parameters {
 	self.add_item_noise.insert( item, add_prob );
     }
 
+    /// Sets the Bernoulli additive noise parameter to its MAP estimate
+    pub fn fit_additive_noise_map( &mut self, item: Item, count_on: Count, count_off: Count ) {
+	let (bias_on, bias_off) = self.get_additive_bias();
+	let add_prob = calc_prob( count_on + bias_on, count_off + bias_off );
+	self.add_item_noise.insert( item, add_prob );
+    }
+
+    pub fn calc_additive_loglik( &self, item: Item, on_count: Count, off_count: Count ) -> f64 {
+	let prob = self.get_additive_noise( item );
+	calc_loglik( prob, on_count, off_count )
+    }
+
+    /// Calculates the log of the prior probability of additive noise parameter for the given item
+    pub fn calc_additive_logprior( &self, item: Item ) -> f64 {
+	let prob = self.get_additive_noise( item );
+	self.add_item_prior.ln_pdf( prob ) / f64::ln( 2.0 )
+    }
+
+    pub fn set_destructive_bias( &mut self, positive_bias: Count, negative_bias: Count ) {
+	let a_shape = positive_bias as f64 + 1.0;
+	let b_shape = negative_bias as f64 + 1.0;
+	self.kill_item_prior = Beta::new( a_shape, b_shape ).expect( "provide positive shapes" );
+    }
+
+    pub fn get_destructive_bias( &self ) -> (Count, Count) {
+	(self.kill_item_prior.shape_a() as Count - 1, self.kill_item_prior.shape_b() as Count - 1)
+    }
+
     pub fn get_destructive_noise( &self, item: Item ) -> f64 {
 	self.kill_item_noise.get( &item ).map_or( 0.0, |p| *p )
     }
@@ -320,6 +377,33 @@ impl Parameters {
 	let kill_prob = calc_prob( count_on, count_off );
 	self.kill_item_noise.insert( item, kill_prob );
     }
+    
+    pub fn fit_destructive_noise_map( &mut self, item: Item, count_on: Count, count_off: Count ) {
+	let (bias_on, bias_off) = self.get_destructive_bias();
+	let kill_prob = calc_prob( count_on + bias_on, count_off + bias_off );
+	// print!( "Destructive noise {item} {kill_prob:.3}" );
+	self.kill_item_noise.insert( item, kill_prob );
+    }
+
+    pub fn calc_destructive_loglik( &self, item: Item, on_count: Count, off_count: Count ) -> f64 {
+	let prob = self.get_destructive_noise( item );
+	calc_loglik( prob, on_count, off_count )
+    }
+
+    pub fn calc_destructive_logprior( &self, item: Item ) -> f64 {
+	let prob = self.get_destructive_noise( item );
+	self.kill_item_prior.ln_pdf( prob ) / f64::ln( 2.0 )
+    }
+
+    pub fn set_pattern_bias( &mut self, positive_bias: Count, negative_bias: Count ) {
+	let shape_a = positive_bias as f64 + 1.0;
+	let shape_b = positive_bias as f64 + 1.0;
+	self.pattern_prior = Beta::new( shape_a, shape_b ).expect( "positive shapes" );
+    }
+
+    pub fn get_pattern_bias( &self ) -> (Count, Count) {
+	(self.pattern_prior.shape_a() as Count - 1, self.pattern_prior.shape_b() as Count - 1)
+    }
 
     pub fn get_pattern_prob( &self, pattern: Token ) -> f64 {
 	self.pattern_prob.get( &pattern ).map_or( 0.0, |p| *p )
@@ -329,14 +413,25 @@ impl Parameters {
 	self.pattern_prob.insert( pattern, probability );
     }
 
+    /// Removes the parameter for the given pattern
+    pub fn forget( &mut self, pattern: Token ) {
+	self.pattern_prob.remove( &pattern );
+    }
+
+    /// Removes all parameters for patterns
+    pub fn clear( &mut self ) {
+	self.pattern_prob.clear();
+    }
+
     pub fn fit_pattern_prob_mle( &mut self, pattern: Token, count_on: Count, count_off: Count ) {
 	let prob = calc_prob( count_on, count_off );
 	self.pattern_prob.insert( pattern, prob );
     }
 
-    pub fn get_pattern_cost <It> (&self, tokens: It) -> f64 where It: Iterator<Item = Token> {
-	tokens.map( |t| self.get_pattern_prob( t ))
-	    .map( |p| log( p )).sum()
+    pub fn fit_pattern_prob_map( &mut self, pattern: Token, count_on: Count, count_off: Count ) {
+	let (bias_on, bias_off) = self.get_pattern_bias();
+	let pattern_prob = calc_prob( count_on + bias_on, count_off + bias_off );
+	self.pattern_prob.insert( pattern, pattern_prob );
     }
 
     pub fn calc_pattern_loglik( &self, token: Token, on_count: Count, off_count: Count ) -> f64 {
@@ -344,24 +439,9 @@ impl Parameters {
 	calc_loglik( prob, on_count, off_count )
     }
 
-    pub fn get_additive_cost <It> (&self, items: It) -> f64 where It: Iterator<Item = Item> {
-	items.map( |i| self.get_additive_noise( i ))
-	    .map( |p| log( p )).sum()
-    }
-
-    pub fn calc_additive_loglik( &self, item: Item, on_count: Count, off_count: Count ) -> f64 {
-	let prob = self.get_additive_noise( item );
-	calc_loglik( prob, on_count, off_count )
-    }
-
-    pub fn get_destructive_cost <It> (&self, items: It) -> f64 where It: Iterator<Item = Item> {
-	items.map( |i| self.get_destructive_noise( i ))
-	    .map( |p| log( p )).sum()
-    }
-
-    pub fn calc_destructive_loglik( &self, item: Item, on_count: Count, off_count: Count ) -> f64 {
-	let prob = self.get_destructive_noise( item );
-	calc_loglik( prob, on_count, off_count )
+    pub fn calc_pattern_logprior( &self, token: Token ) -> f64 {
+	let prob = self.get_pattern_prob( token );
+	self.pattern_prior.ln_pdf( prob ) / f64::ln( 2.0 )
     }
 }
 
@@ -454,10 +534,11 @@ impl CandidatePattern {
 }
 
 impl PatternRecombinator {
-    fn new( blocked: HashSet<InternalPattern> ) -> PatternRecombinator {
+    fn new( blocked: HashSet<InternalPattern>, current: &Parameters ) -> PatternRecombinator {
 	PatternRecombinator{
 	    candidate_queue: Vec::new(),
 	    blocked,
+	    parameters: current.clone(),
 	}
     }
 
@@ -482,7 +563,7 @@ impl PatternRecombinator {
 		    continue;
 		}
 
-		let (probability, gain) = estimate_gain_over_empty_model( &pattern, database );
+		let (probability, gain) = self.estimate_gain_over_empty_model( &pattern, database );
 		// println!( "Combine {left:?} + {right:?} = {pattern:?} (gain {gain:.3})" );
 		if gain > 0.0 {
 		    let candidate = CandidatePattern::new( pattern.clone(), probability, gain );
@@ -501,6 +582,27 @@ impl PatternRecombinator {
 	// sort in ascending order, so we can pop at the end
 	self.candidate_queue.sort_unstable_by( |left, right| left.gain_estimate.total_cmp( &right.gain_estimate ));
     }
+
+    /// Estimates the pattern probability and gain of adding pattern to the empty model.
+    fn estimate_gain_over_empty_model <D: Database> ( &mut self, pattern: &InternalPattern, database: &D ) -> (f64, f64) {
+	let n = database.query_support( vec!() );
+	let pattern_support = database.query_support( pattern.clone() );
+	let dummy_token = Token::MAX;
+	self.parameters.fit_pattern_prob_map( dummy_token, pattern_support, n - pattern_support );
+	let pattern_prob = self.parameters.get_pattern_prob( dummy_token );
+	let pattern_loglik = self.parameters.calc_pattern_loglik( dummy_token, pattern_support, n - pattern_support );
+	let pattern_logprior = self.parameters.calc_pattern_logprior( dummy_token );
+	self.parameters.forget( dummy_token );
+
+	let calc_add_noise_diff = |item: &Item| {
+	    let support = database.query_support( vec!( *item ));
+	    let new_loglik = self.parameters.calc_additive_loglik( *item, support - pattern_support, n - pattern_support );
+	    let old_loglik = self.parameters.calc_additive_loglik( *item, support, n );
+	    new_loglik - old_loglik
+	};
+	let item_diff_sum: f64 = pattern.iter().map( calc_add_noise_diff ).sum();
+	(pattern_prob, pattern_loglik + pattern_logprior + item_diff_sum)
+    }
 }
 
 impl Iterator for PatternRecombinator {
@@ -509,25 +611,6 @@ impl Iterator for PatternRecombinator {
     fn next(&mut self) -> Option<Self::Item> {
 	self.candidate_queue.pop()
     }
-}
-
-/// Estimates the pattern probability and gain of adding pattern to the empty model.
-fn estimate_gain_over_empty_model <D: Database> ( pattern: &InternalPattern, database: &D ) -> (f64, f64) {
-    let n = database.query_support( vec!() );
-    let pattern_support = database.query_support( pattern.clone() );
-    let pattern_prob = pattern_support as f64 / n as f64;
-    let pattern_loglik = calc_loglik( pattern_prob, pattern_support, n - pattern_support );
-    
-    let calc_add_noise_diff = |item: &Item| {
-	let support = database.query_support( vec!( *item ));
-	let new_prob = (support - pattern_support) as f64 / (n - pattern_support) as f64;
-	let new_loglik = calc_loglik( new_prob, support - pattern_support, n - support );
-	let old_prob = support as f64 / n as f64;
-	let old_loglik = calc_loglik( old_prob, support, n - support );
-	new_loglik - old_loglik
-    };
-    let item_diff_sum: f64 = pattern.iter().map( calc_add_noise_diff ).sum();
-    (pattern_prob, pattern_loglik + item_diff_sum)
 }
 
 #[cfg(test)]
@@ -567,7 +650,7 @@ mod test {
 	    .collect();
 
 	let model = BernoulliAssignment::new( &universe );
-	let cover: UseCount = model.cover( data.iter().map( |t| (t, 1) ) ); // make a vector of transaction a data base for testing
+	let cover: UseCount = model.cover( data.iter().map( |t| (t.clone(), 1) ) ); // make a vector of transaction a data base for testing
 
 	assert_eq!( cover.number_transactions, 5 );
 	let add_count_expect = vec!( 0, 5, 4, 3, 2, 1 );
@@ -865,8 +948,13 @@ mod test {
 	    }
 	}
 
-	let expected_candidates = vec!( vec!( 0, 2 ), vec!( 0, 1, 2 ) );
-	let mut generator = PatternRecombinator::new( patterns.iter().cloned().collect() );
+	let mut parameters = Parameters::new(); // we only need the additive noise parameters
+	parameters.fit_additive_noise_map( 0, 6, 4 );
+	parameters.fit_additive_noise_map( 1, 9, 1 );
+	parameters.fit_additive_noise_map( 2, 7, 3 );
+
+	let expected_candidates = vec!( vec!( 0, 1, 2 ), vec!( 0, 2 ) );
+	let mut generator = PatternRecombinator::new( patterns.iter().cloned().collect(), &parameters );
 	generator.combine_patterns( &patterns, &database );
 	generator.sort_candidates();
 	let calculated_candidates: Vec<CandidatePattern> = generator.collect();
@@ -877,5 +965,56 @@ mod test {
 	    // candidate patterns contain items in order
 	    assert_eq!( expected, &calculated.pattern );
 	}
+    }
+
+    #[test]
+    /// Check if parameter fit is correct with prior
+    fn test_bias_fit() {
+	let mut param = Parameters::new();
+	let (noise_plus_bias, noise_min_bias, noise_total_bias) = (1, 2, 3);
+	let (pattern_plus_bias, pattern_min_bias, pattern_total_bias) = (1, 1, 2);
+	param.set_additive_bias( noise_plus_bias, noise_min_bias );
+	param.set_destructive_bias( noise_plus_bias, noise_min_bias );
+	param.set_pattern_bias( pattern_plus_bias, pattern_min_bias );
+
+	param.fit_additive_noise_map( 0, 2, 1 ); // 2/3
+	param.fit_destructive_noise_map( 0, 1, 2  ); // 1/3
+	param.fit_additive_noise_map( 1, 6, 0 ); // 6/6
+	param.fit_destructive_noise_map( 1, 0, 0); // 0/0p
+	param.fit_pattern_prob_map( 0, 5, 1 ); // 5/6
+	
+	assert_approx!( param.get_additive_noise( 0 ), (2 + noise_plus_bias) as f64 / (3 + noise_total_bias) as f64, 0.01 );
+	assert_approx!( param.get_destructive_noise( 0 ), (1 + noise_plus_bias) as f64 / (3 + noise_total_bias) as f64, 0.01 );
+	assert_approx!( param.get_additive_noise( 1 ), (6 + noise_plus_bias) as f64 / (6 + noise_total_bias) as f64, 0.01 );
+	assert_approx!( param.get_destructive_noise( 1 ), (0 + noise_plus_bias) as f64 / (0 + noise_total_bias) as f64, 0.01 );
+	assert_approx!( param.get_pattern_prob( 0 ), (5 + pattern_plus_bias) as f64 / (6 + pattern_total_bias) as f64, 0.01 );
+    }
+
+    #[test]
+    /// Test the joint distributions for counts and parameters
+    fn test_log_prior() {
+	let mut param = Parameters::new();
+	let (noise_plus_bias, noise_min_bias) = (1, 2);
+	let (pattern_plus_bias, pattern_min_bias) = (1, 1);
+	param.set_additive_bias( noise_plus_bias, noise_min_bias );
+	param.set_destructive_bias( noise_plus_bias, noise_min_bias );
+	param.set_pattern_bias( pattern_plus_bias, pattern_min_bias );
+
+	let additive_noise_0 = 0.3;
+	let destructive_noise_0 = 0.001;
+	let additive_noise_1 = 0.001;
+	let destructive_noise_1 = 0.999;
+	let pattern_prob = 0.75;
+	param.set_additive_noise( 0, additive_noise_0 );
+	param.set_destructive_noise( 0, destructive_noise_0 );
+	param.set_additive_noise( 1, additive_noise_1 );
+	param.set_destructive_noise( 1, destructive_noise_1 );
+	param.set_pattern_prob( 0, pattern_prob );
+
+	assert_approx!( param.calc_additive_logprior( 0 ), f64::log2( 1.764 ), 0.01 );
+	assert_approx!( param.calc_destructive_logprior( 0 ), f64::log2( 0.012 ), 0.01 );
+	assert_approx!( param.calc_additive_logprior( 1 ), f64::log2( 0.012 ), 0.01 );
+	assert_approx!( param.calc_destructive_logprior( 1 ), f64::log2( 0.000012 ), 0.01 );
+	assert_approx!( param.calc_pattern_logprior( 0 ), f64::log2( 1.125 ), 0.01 );
     }
 }
