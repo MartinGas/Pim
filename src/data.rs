@@ -33,7 +33,7 @@ pub type DataPair = (Transaction, Count);
 /// Stores data as a linked trie with elements ordered by decreasing support.
 pub struct LinkedTrieBackedDatabase {
     data: linked_trie::Trie,
-    // singleton_counts: HashMap<Item, u64>,
+    /// maps original items to reordered items
     item_map: HashMap<Item, Item>,
     /// special bogus item that is appended to every transaction to mark its end
     stop_item: Item,
@@ -144,7 +144,8 @@ impl LinkedTrieBackedDatabase {
 
     /// Creates a vector that contains all unique items in the data base
     pub fn create_universe( &self ) -> Vec<Item> {
-	let mut items: Vec<Item> = self.item_map.keys().copied().collect();
+	// universe in data base is values mapped to
+	let mut items: Vec<Item> = self.item_map.values().copied().collect();
 	items.sort();
 	items
     }
