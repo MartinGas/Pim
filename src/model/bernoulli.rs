@@ -1,4 +1,6 @@
 
+mod serialize; // serialization and pretty printing of the model
+
 use std::collections::{HashSet, HashMap};
 use bit_set::BitSet;
 use statrs::distribution::{Beta, Continuous};
@@ -6,6 +8,8 @@ use statrs::distribution::{Beta, Continuous};
 use crate::DataPair;
 
 use super::*;
+
+pub use serialize::BernoulliFormatter;
 
 #[derive( Debug )]
 /// Bernoulli model with pattern assignments as latent variables and additive and destructive noise
@@ -20,9 +24,11 @@ pub struct BernoulliAssignment {
     token_count: usize,
 }
 
+// \todo move these structs to sub-modules
+
 #[derive( Debug, Clone )]
 /// Manages the parameters of the Bernoulli model.
-struct Parameters {
+pub struct Parameters {
     /// Bernoulli parameters for non-covered items
     add_item_noise: HashMap<Item, f64>,
     /// prior distribution over additive noise parameter
@@ -175,23 +181,40 @@ impl BernoulliAssignment {
 	token
     }
 
+    pub fn iterate_universe<'a>( &'a self ) -> Box<dyn Iterator<Item = Item> + 'a> {
+	Box::new( self.universe.iter().copied() )
+    }
+    
+    pub fn iterate_tokens<'a>( &'a self ) -> Box<dyn Iterator<Item = Token> + 'a> {
+	Box::new( self.patterns.keys().copied() )
+    }
+    
     pub fn get_pattern( &self, pattern: Token ) -> Option<&InternalPattern> {
 	self.patterns.get( &pattern )
     }
 
-    // todo: write down the model and update steps for reference
+    pub fn get_parameters( &self ) -> &Parameters {
+	&self.parameters
+    }
+
+    // \deprecated
+    // todo: remove
     pub fn calc_additive_noise_loglik( &self, item: Item, cover: &UseCount ) -> f64 {
 	let not_occur_not_cover = cover.get_item_cover_count( item, false, false );
 	let occur_not_cover = cover.get_item_cover_count( item, true, false );
 	self.parameters.calc_additive_loglik( item, occur_not_cover, not_occur_not_cover )
     }
 
+    // \deprecated
+    // todo: remove
     pub fn calc_destructive_noise_loglik( &self, item: Item, cover: &UseCount ) -> f64 {
 	let not_occur_cover = cover.get_item_cover_count( item, false, true );
 	let occur_cover = cover.get_item_cover_count( item, true, true );
 	self.parameters.calc_destructive_loglik( item, not_occur_cover, occur_cover )
     }
 
+    // \deprecated
+    // todo: remove
     pub fn calc_pattern_loglik( &self, pattern: Token, cover: &UseCount ) -> f64 {
 	let usage = cover.get_pattern_count( pattern );
 	let n = cover.get_transaction_count();
@@ -230,10 +253,10 @@ impl BernoulliAssignment {
 	let mut cover = Transaction::new();
 	let mut covering: Vec<PatternPair> = Vec::new();
 	while !cover_candidates.is_empty() {
-	    for (token, gain) in &gain_per_pattern {
-		let pat = self.patterns.get( token ).unwrap();
+	    // for (token, _gain) in &gain_per_pattern {
+		// let pat = self.patterns.get( token ).unwrap();
 		// println!( "{pat:?} gains {gain:.3}" );
-	    }
+	    // }
 
 	    // find the best candidate
 	    let best_entry = gain_per_pattern.iter().max_by( |left_entry, right_entry| left_entry.1.partial_cmp( right_entry.1 ).expect( "not nan" ) )
@@ -397,7 +420,7 @@ impl Parameters {
 
     pub fn set_pattern_bias( &mut self, positive_bias: Count, negative_bias: Count ) {
 	let shape_a = positive_bias as f64 + 1.0;
-	let shape_b = positive_bias as f64 + 1.0;
+	let shape_b = negative_bias as f64 + 1.0;
 	self.pattern_prior = Beta::new( shape_a, shape_b ).expect( "positive shapes" );
     }
 

@@ -6,11 +6,16 @@ use bit_set::BitSet;
 
 use crate::{Transaction, Itemvec, Item};
 
+/// Converts a structure into a string
+pub trait PrettyFormatter<T> {
+    fn format_pretty( &self, object: &T ) -> String;
+}
+
 pub type DataGenerator<T> = Box<dyn Iterator<Item = T>>;
 
 /// Reads data in FIMI format into a data base. Creates data using the converter, which is given a line
 pub fn read_data<T, F>( path: &str, converter: F ) -> Result<DataGenerator<T>, String> where
-    F: Fn(&str) -> Option<T>,
+    F: Fn(&str) -> Option<T> + 'static,
 {
     let path = Path::new( path );
     let file = File::open( path ).map_err( |e| e.to_string() )?;
@@ -18,7 +23,7 @@ pub fn read_data<T, F>( path: &str, converter: F ) -> Result<DataGenerator<T>, S
     let generator = reader.lines()
         .filter_map( |l| l.ok() )
 	// \todo set reasonable initial capacity for faster reading
-        .filter_map( |l| converter( &l ));
+        .filter_map( move |l| converter( &l ));
     Result::Ok( Box::new( generator ))
 }
 
@@ -44,4 +49,18 @@ pub fn parse_fimi_to_bitset( line: &str, splitter: &str, capacity: usize ) -> Op
 	}
     }
     Some( transaction )
+}
+
+/// Creates a fimi string from an iterator over items
+pub fn produce_fimi<I: Iterator<Item = Item>>( items: I, left_delimiter: &str, separator: &str, right_delimiter: &str ) -> String {
+    let add_item_to_string = |mut fimi: String, i: Item| {
+	fimi.push_str( i.to_string().as_str() );
+	fimi.push_str( separator );
+	fimi
+    };
+    let mut fimi = String::new();
+    fimi.push_str( left_delimiter );
+    fimi = items.fold( fimi, add_item_to_string );
+    fimi.push_str( right_delimiter );
+    fimi
 }

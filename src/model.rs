@@ -1,5 +1,5 @@
 
-use crate::{Item, Transaction, Count, Database, DataPair};
+use crate::*;
 
 mod bernoulli;
 
@@ -30,4 +30,4 @@ pub trait Model {
     fn remove_candidate( &mut self, candidate: &mut Self::Candidate );
 }
 
-pub use bernoulli::BernoulliAssignment;
+pub use bernoulli::{BernoulliAssignment, BernoulliFormatter};
