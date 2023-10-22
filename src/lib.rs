@@ -12,8 +12,3 @@ pub use miner::Miner;
 
 /// Used as intermediate representation for itemset patterns
 pub type Itemvec = Vec<Item>;
-
-/// Objects that can be recorded in the log
-pub trait Loggable {
-    fn log(&self, message: &str, level: tracing::Level );
-}
