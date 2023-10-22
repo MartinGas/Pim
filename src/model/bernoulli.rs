@@ -540,14 +540,6 @@ fn log( x: f64 ) -> f64 {
     if x > 0.0 { f64::log2( x ) } else { f64::NEG_INFINITY }
 }
 
-fn vector_to_bitset( items: &Vec<usize> ) -> BitSet {
-    let mut set = BitSet::new();
-    for item in items {
-	set.insert( *item );
-    }
-    set
-}
-
 impl CandidatePattern {
     fn new( pattern: InternalPattern, probability_estimate: f64, gain_estimate: f64 ) -> CandidatePattern {
 	CandidatePattern{ pattern, probability_estimate, gain_estimate,
@@ -1039,5 +1031,13 @@ mod test {
 	assert_approx!( param.calc_additive_logprior( 1 ), f64::log2( 0.012 ), 0.01 );
 	assert_approx!( param.calc_destructive_logprior( 1 ), f64::log2( 0.000012 ), 0.01 );
 	assert_approx!( param.calc_pattern_logprior( 0 ), f64::log2( 1.125 ), 0.01 );
+    }
+
+    fn vector_to_bitset( items: &Vec<usize> ) -> BitSet {
+	let mut set = BitSet::new();
+	for item in items {
+	    set.insert( *item );
+	}
+	set
     }
 }

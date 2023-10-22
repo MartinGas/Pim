@@ -1,7 +1,6 @@
 
 use crate::*;
 use crate::io::PrettyFormatter;
-use crate::model::BernoulliAssignment;
 
 
 pub trait Miner<'a, D, M> {
