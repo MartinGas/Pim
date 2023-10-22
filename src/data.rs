@@ -2,13 +2,11 @@
 use std::iter::IntoIterator;
 use std::collections::HashMap;
 use std::cmp::{Ord, Eq};
-use std::path::Path;
-use std::fs::File;
-use std::io::{BufReader, BufRead};
 use std::cell::RefCell;
 use std::rc::Rc;
-
 use bit_set::BitSet;
+
+use crate::*;
 
 mod linked_trie;
 
@@ -16,12 +14,12 @@ pub type Transaction = BitSet;
 pub type Query = Vec<Item>;
 pub type Count = u64;
 pub type Item = usize;
-pub type ItemVec = Vec<Item>;
 
 pub trait Database {
+
     /// Adds every transaction produced by the iterator to the database
     fn add <'a, Con> ( &mut self, transactions: Con ) where
-	Con: IntoIterator<Item = &'a ItemVec>;
+	Con: IntoIterator<Item = &'a Itemvec>;
 
     /// Returns the support of all transactions containing all items in the query
     fn query_support( &self, query: Query ) -> Count;
@@ -55,35 +53,10 @@ struct SharedSequenceBuffer {
     pop_stack: Vec<usize>,
 }
 
-/// Reads data in FIMI format into a data base
-pub fn read_data( path: &str ) -> Result<LinkedTrieBackedDatabase, String> {
-    let path = Path::new( path );
-    let file = File::open( path ).map_err( |e| e.to_string() )?;
-    let reader = BufReader::new( file );
-    let data: Vec<ItemVec> = reader.lines()
-        .filter_map( |l| l.ok() )
-        .filter_map( |l| read_transaction( &l, " " ))
-	.collect();
-    let mut database = LinkedTrieBackedDatabase::new( &data );
-    database.add( &data );
-    Ok( database )
-}
-
-fn read_transaction( line: &str, splitter: &str ) -> Option<ItemVec> {
-    let mut transaction = ItemVec::new();
-    for chunk in line.split( splitter ) {
-	match Item::from_str_radix( chunk, 10 ) {
-	    Ok( item ) => transaction.push( item ),
-	    Err( _ ) => return None,
-	}
-    }
-    Some( transaction )
-}
-
 impl Database for LinkedTrieBackedDatabase {
-
+    
     fn add <'a, Con> ( &mut self, transactions: Con ) where
-	Con: IntoIterator<Item = &'a ItemVec>
+	Con: IntoIterator<Item = &'a Itemvec>
     {
 	for t in transactions.into_iter() {
 	    let mut mapped_transaction: Vec<Item> = self.map_into( t );
@@ -98,6 +71,13 @@ impl Database for LinkedTrieBackedDatabase {
 	// let mapped_query: Vec<Item> = self.map_into( &query );
 	self.data.query_support( query )
     }
+}
+
+pub fn populate_trie_database<I>( data_generator: I ) -> LinkedTrieBackedDatabase where I: Iterator<Item = Itemvec> {
+    let data: Vec<Itemvec> = data_generator.collect();
+    let mut database = LinkedTrieBackedDatabase::new( &data );
+    database.add( &data );
+    database
 }
 
 impl <'a> IntoIterator for &'a LinkedTrieBackedDatabase {
@@ -284,8 +264,8 @@ mod test {
 	    vec!( 0 ),
 	);
 
-	type ItemVec = Vec<Item>;
-	let mut expectations: HashMap<ItemVec, Count> = HashMap::new();
+	type Itemvec = Vec<Item>;
+	let mut expectations: HashMap<Itemvec, Count> = HashMap::new();
 	expectations.insert( vec!( 0 ), 1 );
 	expectations.insert( vec!( 0, 1 ), 2 );
 	expectations.insert( vec!( 0, 1, 2 ), 1 );
@@ -296,7 +276,7 @@ mod test {
 	database.add( &data );
 
 	for (real_chunk, real_count) in database.into_iter() {
-	    let real_chunk_vector: ItemVec = real_chunk.iter().collect();
+	    let real_chunk_vector: Itemvec = real_chunk.iter().collect();
 	    let count = expectations.remove( &real_chunk_vector );
 
 	    assert!( count.is_some() );

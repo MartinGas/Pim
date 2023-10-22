@@ -107,6 +107,7 @@ impl Trie {
 	self.root.add( &transaction )
     }
 
+    #[allow(dead_code)]
     pub fn iterate <'a> ( &'a self ) -> TrieIterator<'a> {
 	TrieIterator::new( &self.root )
     }
@@ -119,7 +120,7 @@ impl Trie {
 }
 
 impl <'a> TrieIterator<'a> {
-
+    #[allow(dead_code)]
     fn new( start: &'a Node<EdgeList, EdgeOf<EdgeList>> ) -> TrieIterator<'a> {
 	TrieIterator{ iterator: NodeIterator::new( start, None ) }
     }
