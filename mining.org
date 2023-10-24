@@ -2,9 +2,23 @@
 
 I wonder: can we normalize \(p(t,a) / Z\) i.e. find the probability of \(t\)? I get the feeling we're just missing Binomial coefficients.
 
-I wonder: can we normalize \(p(t,a) / Z\) i.e. find the probability of \(t\)? I get the feeling we're just missing Binomial coefficients.
-
-
+* Data structures
+** Trie
+- benchmark
+  - 10000 uniform queries took 35s
+  - shortest 10% account for 10s while longest 10% accounts for only 1.3s
+  - times decay super-linearly from shortest to longest queries
+- profile run on initial implementation reveals 95% of the running time consists of support queries
+- 63% spent in select function of edge implementation
+  - 60% spent on hash maps
+    - 15.5% iterating over hash map
+    - 25% get_inner (mystery?)
+    - 20% contains_key
+  - hashing accounts for 8.4%
+- calculating is only 0.5%
+- fitting is not measurable
+- is_partial_superset requires 25%
+  - 20% spent comparing path item < query item
 * Bernoulli model
 ** Transaction distribution
 We define a generative model for i.i.d. transactions \(t\).
@@ -144,3 +158,16 @@ The maximum a posteriori estimate is a biased version of the maximum likelihood 
 \[ \hat{\theta}_p} = \frac{c_p + c_+ - 1}{n + c_+ + c_- - 2} \]
 \[ \hat{\alpha_i} = \frac{c(i,1,0) + a_+ - 1}{c(i,1,0) + c(i,0,0) + a_+ + a_- - 2} \]
 \[ \hat{\beta_i} = \frac{c(i,0,1) + b_+ - 1}{c(i,0,1) + c(i,1,1) + b_+ + b_- - 2} \] 
+* Improvements
+** Data structures
+- cache (short) queries as trie
+- use skip graph to navigate the edge list faster
+- provide batched query to reduce traversal
+- parallelize traversal
+** Model
+- integrate out parameters
+- sum out assignments
+  - Gibb's sampler to estimate the pmf?
+** Search
+- Stochastic search MCTS
+- Maintain residual trie that contains uncompressed additive noise (search = traversal?)
