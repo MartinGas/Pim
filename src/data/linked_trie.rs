@@ -101,10 +101,10 @@ impl Trie {
 	self.root.query_support( &query )
     }
 
-    /// Adds transaction t to the trie, increasing all supports
-    pub fn add( &mut self, mut transaction: Vec<Item> ) {
+    /// Adds transaction t to the trie, increasing all supports by count
+    pub fn add( &mut self, mut transaction: Vec<Item>, count: Count ) {
 	transaction.sort();
-	self.root.add( &transaction )
+	self.root.add( &transaction, count )
     }
 
     #[allow(dead_code)]
@@ -213,8 +213,8 @@ impl <L: Link> Node<L, L::Edge> where L::Edge: Eq + Hash {
 
 impl <L: Default + Link> Node<L, L::Edge> where L::Edge: Eq + Hash + Clone {
     /// Extends an existing branch or creates a new one
-    pub fn add( &mut self, transaction: ItemSeq ) {
-	self.support += 1;
+    pub fn add( &mut self, transaction: ItemSeq, count: Count ) {
+	self.support += count;
 	if transaction.is_empty() {
 	    return;
 	}
@@ -234,10 +234,10 @@ impl <L: Default + Link> Node<L, L::Edge> where L::Edge: Eq + Hash + Clone {
 		let intermediate = self.children.get_mut( &edge ).expect( "Inserted intermediate child" );
 		intermediate.support = pushed_down_child.support;
 		intermediate.push( &excess, pushed_down_child );
-		intermediate.add( remainder );
+		intermediate.add( remainder, count );
 	    } else {
 		let child = self.children.get_mut( &edge ).expect( "Edge leads to child" );
-		child.add( remainder );
+		child.add( remainder, count );
 	    }
 	} else {
 	    // we need a new edge and node
@@ -434,7 +434,7 @@ mod test {
     pub fn build_trie_from_complete_data( data: &Vec<Vec<Item>> ) -> Trie {
 	let mut trie = Trie::new();
 	for transaction in data {
-	    trie.add( transaction.clone() );
+	    trie.add( transaction.clone(), 1 );
 	}
 	trie
     }
