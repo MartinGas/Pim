@@ -18,8 +18,15 @@ fn main() -> Result<(), String> {
     let mut database = LinkedTrieBackedDatabase::new( &data );
     database.add( &data );
 
-    info!( "Start benchmark: uniform queries" );
-    let n = 10000;
+    let n = 5000;
+
+    info!( "Start benchmark: queries without cache" );
+    database.set_max_cache_length( 0 );
+    let time = benchmark_uniform_queries( &database, n );
+    info!( "Result: {n} uniform queries took {}ms", time.as_millis() );
+
+    info!( "Start benchmark: queries with cache" );
+    database.set_max_cache_length( 10 ); // cache all queries
     let time = benchmark_uniform_queries( &database, n );
     info!( "Result: {n} uniform queries took {}ms", time.as_millis() );
 
@@ -31,6 +38,8 @@ fn main() -> Result<(), String> {
 
 fn benchmark_uniform_queries( database: &LinkedTrieBackedDatabase, number_queries: u64 ) -> Duration {
     let mut universe = database.create_universe();
+    println!( "universe {universe:?}" );
+    
     let m = universe.len();
     // There are more distinct queries around m/2 length.
     // Use binomial, to obtain uniform distribution over queries.
@@ -41,6 +50,7 @@ fn benchmark_uniform_queries( database: &LinkedTrieBackedDatabase, number_querie
     let mut query_time = Duration::new( 0, 0 );
     let number_buckets = 10;
     let mut query_time_buckets = vec!( Duration::new( 0, 0 ); number_buckets );
+    let mut query_count_buckets = vec!( 0; number_buckets );
 
     for _ in 0 .. number_queries {
 	let mut gen = thread_rng();
@@ -58,19 +68,18 @@ fn benchmark_uniform_queries( database: &LinkedTrieBackedDatabase, number_querie
     }
 
     let length_query_times: Vec<u64> = query_time_buckets.iter().map( |d| d.as_millis() as u64 ).collect();
-    debug!( "time by length {length_query_times:?} [ms]" );
+    info!( "time by length {length_query_times:?} [ms]" );
     query_time
 }
 
 fn generate_random_query( universe: &mut Itemvec, length: usize ) -> Itemvec {
-    let mut dist = DiscreteUniform::new( 0, length as i64 - 1 ).unwrap();
+    let m = universe.len() as i64;
     let mut gen = thread_rng();
-    let sample_length = dist.sample( &mut gen ) as usize;
 
     let mut query = Itemvec::new();
-    for sample_count in 0 .. sample_length {
-	dist = DiscreteUniform::new( sample_count as i64, sample_length as i64 ).unwrap();
-	let i = dist.sample( &mut gen ) as usize;
+    for sample_count in 0 .. length {
+	let item_dist = DiscreteUniform::new( sample_count as i64, m - 1 as i64 ).unwrap();
+	let i = item_dist.sample( &mut gen ) as usize;
 	query.push( universe[i] );
 	// move i into sample count place to avoid drawing it again
 	universe.swap( sample_count, i );
@@ -80,7 +89,7 @@ fn generate_random_query( universe: &mut Itemvec, length: usize ) -> Itemvec {
 
 fn prepare_logging() {
     let tracer = tracing_subscriber::fmt::fmt()
-        .with_max_level( tracing_subscriber::filter::LevelFilter::DEBUG )
+        .with_max_level( tracing_subscriber::filter::LevelFilter::INFO )
         .finish();
     tracing::subscriber::set_global_default( tracer ).unwrap();
 }

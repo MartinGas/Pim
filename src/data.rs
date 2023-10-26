@@ -31,10 +31,14 @@ pub type DataPair = (Transaction, Count);
 /// Stores data as a linked trie with elements ordered by decreasing support.
 pub struct LinkedTrieBackedDatabase {
     data: linked_trie::Trie,
+    /// Caches past queries. RefCell'd for internal mutability.
+    cache: RefCell<linked_trie::Trie>,
     /// maps original items to reordered items
     item_map: HashMap<Item, Item>,
     /// special bogus item that is appended to every transaction to mark its end
     stop_item: Item,
+    /// Controls length of queries to cache.
+    max_cache_length: usize,
 }
 
 type ItemBuffer = Rc<RefCell<Vec<Item>>>;
@@ -62,14 +66,16 @@ impl Database for LinkedTrieBackedDatabase {
 	    let mut mapped_transaction: Vec<Item> = self.map_into( t );
 	    // add marker so we know where a transaction stops in the trie
 	    mapped_transaction.push( self.stop_item );
-	    self.data.add( mapped_transaction );
+	    self.data.add( mapped_transaction, 1 );
 	};
     }
 
-    fn query_support( &self, query: Query ) -> Count {
-	// let us use the mapped items
-	// let mapped_query: Vec<Item> = self.map_into( &query );
-	self.data.query_support( query )
+    fn query_support( &self, mut query: Query ) -> Count {
+	if query.len() < self.max_cache_length {
+	    self.query_cached( query )
+	} else {
+	    self.query_directly( query )
+	}
     }
 }
 
@@ -106,9 +112,10 @@ impl LinkedTrieBackedDatabase {
 	
 	LinkedTrieBackedDatabase {
 	    data: linked_trie::Trie::new(),
-	    // singleton_counts: HashMap::new(),
+	    cache: RefCell::new( linked_trie::Trie::new() ),
 	    item_map: map_by_score( &frequency_map ),
 	    stop_item: frequency_map.len(), // stop at max_item + 1
+	    max_cache_length: 4,
 	}
     }
 
@@ -117,8 +124,10 @@ impl LinkedTrieBackedDatabase {
 	let stop_item = universe.iter().max().map( |item| *item ).unwrap_or( 0 ) + 1;
 	LinkedTrieBackedDatabase {
 	    data: linked_trie::Trie::new(),
+	    cache: RefCell::new( linked_trie::Trie::new() ),
 	    item_map: universe.iter().map( |item| (*item, *item) ).collect(),
-	    stop_item
+	    stop_item,
+	    max_cache_length: 4,
 	}
     }
 
@@ -130,12 +139,50 @@ impl LinkedTrieBackedDatabase {
 	items
     }
 
+    /// Sets maximum length of queries to cache
+    pub fn set_max_cache_length( &mut self, max: usize ) {
+	self.max_cache_length = max;
+    }
+
+    /// Query subset frequency while accessing and updating cache.
+    pub fn query_cached( &self, mut query: Query ) -> Count {
+	query.push( self.stop_item );
+	let cached_support = self.cache.borrow().query_support( query.clone() );
+	
+	// 0 occurrence means not cached or not occurring.
+	// We cannot distinguish between the two.
+	if cached_support > 0 { 
+	    println!( "Found cache {query:?} = {cached_support}" );
+	    return cached_support
+	}
+
+	// not cached
+	query.pop();
+	let support = self.data.query_support( query.clone() );
+	// Cannot store non-occurring things.
+	// Not needed anyway, because query traverses a single path.
+	if query.len() < self.max_cache_length && support > 0  {
+	    println!( "caching {query:?} = {support}" );
+	    // add to cache with stopper
+	    query.push( self.stop_item );
+	    self.cache.borrow_mut().add( query, support );
+	}
+	support
+    }
+
+    /// Query subset frequency directly in the trie, ignoring the cache
+    pub fn query_directly( &self, query: Query ) -> Count  {
+	self.data.query_support( query )
+    }
+
+    
+
     /// Maps items into internal representation and returns the result.
     fn map_into <'a, I> ( &self, items: I ) -> Vec<Item> where I: IntoIterator<Item = &'a Item> {
 	items.into_iter()
 	    .map( |i| *self.item_map.get( i ).expect( "Have mapping for item" ))
 	    .collect()
-    }
+    }    
 }
 
 impl <'a> Iterator for LinkedTrieSequenceIterator<'a> {
