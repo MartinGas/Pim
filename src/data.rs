@@ -9,6 +9,7 @@ use bit_set::BitSet;
 use crate::*;
 
 mod linked_trie;
+mod skip_graph;
 
 pub type Transaction = BitSet;
 pub type Query = Vec<Item>;
@@ -147,24 +148,24 @@ impl LinkedTrieBackedDatabase {
     /// Query subset frequency while accessing and updating cache.
     pub fn query_cached( &self, mut query: Query ) -> Count {
 	query.push( self.stop_item );
-	let cached_support = self.cache.borrow().query_support( query.clone() );
+	let cached_support = self.cache.borrow().query_prefix_support( query.clone() );
 	
 	// 0 occurrence means not cached or not occurring.
 	// We cannot distinguish between the two.
 	if cached_support > 0 { 
-	    println!( "Found cache {query:?} = {cached_support}" );
+	    // println!( "Found cache {query:?} = {cached_support}" );
 	    return cached_support
 	}
 
 	// not cached
 	query.pop();
-	let support = self.data.query_support( query.clone() );
+	let support = self.data.query_subset_support( query.clone() );
 	// Cannot store non-occurring things.
 	// Not needed anyway, because query traverses a single path.
 	if query.len() < self.max_cache_length && support > 0  {
-	    println!( "caching {query:?} = {support}" );
 	    // add to cache with stopper
 	    query.push( self.stop_item );
+	    // println!( "caching {query:?} = {support}" );
 	    self.cache.borrow_mut().add( query, support );
 	}
 	support
@@ -172,7 +173,7 @@ impl LinkedTrieBackedDatabase {
 
     /// Query subset frequency directly in the trie, ignoring the cache
     pub fn query_directly( &self, query: Query ) -> Count  {
-	self.data.query_support( query )
+	self.data.query_subset_support( query )
     }
 
     
@@ -331,4 +332,42 @@ mod test {
 	}
 	assert!( expectations.is_empty() );
     }
+
+    #[test]
+    fn test_cache() {
+	let data = vec!(
+	    vec!( 0, 1 ),
+	    vec!( 1, 2 ),
+	);
+	let mut database = LinkedTrieBackedDatabase::new_with_static_order( &vec!( 0, 1, 2 ));
+	database.add( data.iter() );
+	database.set_max_cache_length( 10 ); // big enough
+
+	assert_eq!( database.query_support( vec!( 0 ) ), 1 );
+	assert_eq!( database.query_support( vec!( 0 ) ), 1 );
+	// does not invent data points
+	assert_eq!( database.query_support( vec!( 0, 2 )), 0 );
+	assert_eq!( database.query_support( vec!( 0, 2 )), 0 );
+	// longer queries work too
+	assert_eq!( database.query_support( vec!( 1, 2 ) ), 1 );
+	assert_eq!( database.query_support( vec!( 1, 2 ) ), 1 );
+	// multiple occurrences work
+	assert_eq!( database.query_support( vec!( 1 ) ), 2 );
+	assert_eq!( database.query_support( vec!( 1 ) ), 2 );
+    }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
