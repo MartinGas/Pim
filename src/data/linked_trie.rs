@@ -1,4 +1,6 @@
 
+mod edge_list;
+
 use std::hash::Hash;
 use std::collections::{self, HashMap};
 use std::default::Default;
@@ -6,6 +8,7 @@ use std::default::Default;
 use bit_set::BitSet;
 
 use super::{Count, Item};
+use edge_list::EdgeList;
 
 /// Trie with natural ordering of Items
 pub struct Trie {
@@ -56,10 +59,12 @@ type ItemVec = Vec<Item>;
 trait Link {
     type Edge; // representation of an edge
 
-    /// returns the edge that matches the query and the remainder of the query
+    /// returns the edge that matches the subset query and the remainder of the query
     fn select <'e, 'q> ( &'e self, query: ItemSeq<'q> ) -> Vec<(Self::Edge, ItemSeq<'q>)>;
 
-    /// Returns the edge, size of the prefix and whether the prefix matches completely, if there is a prefix.
+    /// Determines if there is an edge that is a partial prefix of the sequence.
+    /// Returns the edge, size of the prefix and whether the complete prefix matches the sequence,
+    /// if there is a prefix.
     /// Pre: sequence is not empty
     /// Pre: there is an edge for the first element of sequence
     fn walk( &self, sequence: ItemSeq ) -> Option<(Self::Edge, usize, bool)>;
@@ -77,11 +82,6 @@ trait Link {
 
 type EdgeOf<L> = <L as Link>::Edge;
 
-struct EdgeList {
-    // mapping from distinct starting item to complete label
-    edges: HashMap<Item, ItemVec>,
-}
-
 impl Trie {
 
     pub fn new() -> Trie {
@@ -95,10 +95,15 @@ impl Trie {
 	self.root.print( &mut buf )
     }
 
-    /// Returns the support count of the query.
-    pub fn query_support( &self , mut query: Vec<Item> ) -> Count {
+    /// Returns the support count of the subset query.
+    pub fn query_subset_support( &self , mut query: Vec<Item> ) -> Count {
 	query.sort();
-	self.root.query_support( &query )
+	self.root.query_subset_support( &query )
+    }
+
+    pub fn query_prefix_support( &self, mut query: Vec<Item> ) -> Count {
+	query.sort();
+	self.root.query_prefix_support( &query )
     }
 
     /// Adds transaction t to the trie, increasing all supports by count
@@ -164,9 +169,9 @@ impl <L: Link> Node<L, L::Edge> where L::Edge: Eq + Hash {
 	self.children.get( edge )
     }
 
-    /// visits all matching nodes for the sorted query from position onwards
-    /// return the sum of the supports of terminals
-    pub fn query_support( &self, query: ItemSeq ) -> Count {
+    /// Visits all nodes that represent supersets of query.
+    /// Returns the sum of the supports of terminals.
+    pub fn query_subset_support( &self, query: ItemSeq ) -> Count {
 	// solved query if all items are accounted for
 	if query.is_empty() {
 	    return self.support;
@@ -177,10 +182,33 @@ impl <L: Link> Node<L, L::Edge> where L::Edge: Eq + Hash {
 	for (edge, remainder) in selection {
 	    assert!( self.children.contains_key( &edge ));
 	    let child = &self.children[ &edge ];
-	    sum += child.query_support( remainder );
+	    sum += child.query_subset_support( remainder );
 	}
 	sum
     }
+
+    /// Visits the nodes on the prefix path.
+    /// Returns the support at the terminal.
+    pub fn query_prefix_support( &self, sequence: ItemSeq ) -> Count {
+	// reached terminal
+	if sequence.is_empty() {
+	    return self.support;
+	}
+
+	if let Some( (edge, pos, is_match) ) = self.edges.walk( sequence ) {
+	    if !is_match { // there is a gap in the sequence
+		return 0;
+	    }
+
+	    // found an edge that is a complete prefix
+	    let child = &self.children[ &edge ];
+	    child.query_prefix_support( &sequence[ pos ..] )
+	} else { // there is no matching edge
+	    0
+	}
+    }
+
+    
 
     /// Pushes a prefix down to the child
     /// Pre: there is no edge for the given edge_label
@@ -243,7 +271,7 @@ impl <L: Default + Link> Node<L, L::Edge> where L::Edge: Eq + Hash + Clone {
 	    // we need a new edge and node
 	    let edge = self.edges.add( &transaction );
 	    assert!( !self.children.contains_key( &edge ) );
-	    self.children.insert( edge, Node::new( 1 ));
+	    self.children.insert( edge, Node::new( count ));
 	}
     }
 }
@@ -359,64 +387,6 @@ fn is_prefix( items: ItemSeq, path: &ItemVec ) -> (usize, bool) {
     return (position, path_item.is_none())
 }
 
-impl Link for EdgeList {
-    type Edge = Item;
-
-    fn select <'e, 'q> ( &'e self, query: ItemSeq<'q> ) -> Vec<(Self::Edge, ItemSeq<'q>)> {
-	self.edges.iter()
-	    .filter_map( |(edge, label)| {
-		let (next_pos, is_super) = is_partial_superset( query, &label );
-		let remainder = &query[ next_pos .. ];
-		if is_super { Some( (*edge, remainder) )} else { None }
-	    }).collect()
-    }
-
-    fn walk( &self, sequence: ItemSeq ) -> Option<(Self::Edge, usize, bool)> {
-	assert!( !sequence.is_empty() );
-	let head = sequence[ 0 ];
-	if let Some( label ) = self.edges.get( &head ) {
-	    let (next_pos, success) = is_prefix( sequence, &label );
-	    Some( (head, next_pos, success) )
-	} else {
-	    None
-	}
-    }
-
-    fn add( &mut self, label: ItemSeq ) -> Self::Edge {
-	assert!( !label.is_empty() );
-	let head = label[ 0 ];
-	let last = *label.last().expect( "label is non-empty" );
-	assert!(  !self.edges.contains_key( &head ));
-	let mut label_set = BitSet::with_capacity( last );
-	for item in label {
-	    label_set.insert( *item );
-	}
-	let label: ItemVec = label.iter().map( |itm| *itm ).collect();
-	self.edges.insert( head, label );
-	head
-    }
-
-    fn split( &mut self, edge: &Self::Edge, position: usize ) -> ItemVec {
-	let label = self.edges.get_mut( &edge ).expect( "pre: edge is valid" );
-	label.split_off( position )
-    }
-}
-
-impl Default for EdgeList {
-    fn default() -> Self {
-	EdgeList { edges: HashMap::new() }
-    }
-}
-
-impl <'a> IntoIterator for &'a EdgeList {
-    type Item = (&'a Item, &'a ItemVec);
-    type IntoIter = collections::hash_map::Iter<'a, Item, ItemVec>;
-
-    fn into_iter(self) -> Self::IntoIter {
-	self.edges.iter()
-    }
-}
-
 // todo move it somewhere where it's useful
 #[allow(dead_code)]
 fn format_items <'a, I> ( items: I ) -> String where I: Iterator<Item = &'a Item> {
@@ -440,7 +410,7 @@ mod test {
     }
     
     #[test]
-    fn add_and_query_support() {
+    fn add_and_query_subset_support() {
 	let data = vec!(
 	    vec!( 1, 2, 3 ),
 	    vec!( 0, 2, 1 ),
@@ -460,8 +430,31 @@ mod test {
 	);
 	
 	for (items, expected) in expectations {
-	    let calculated = trie.query_support( items.clone() );
+	    let calculated = trie.query_subset_support( items.clone() );
 	    assert_eq!( calculated, expected, "{}", format_items( items.iter() ) );
+	}
+    }
+
+    #[test]
+    fn add_and_query_prefix_support() {
+	let data = vec!(
+	    vec!( 0 ),
+	    vec!( 0, 1 ),
+	    vec!( 0, 2 ),
+	    vec!( 2 )
+	);
+
+	let trie = build_trie_from_complete_data( &data );
+	let expectations = vec!(
+	    (vec!( 0 ), 3),
+	    (vec!( 0, 1 ), 1),
+	    (vec!( 2 ), 1 ),
+	    (vec!( 1, 2 ), 0),
+	);
+
+	for (prefix, expected) in expectations {
+	    let calculated = trie.query_prefix_support( prefix.clone() );
+	    assert_eq!( calculated, expected, "{prefix:?}" );
 	}
     }
 }
