@@ -41,6 +41,8 @@ pub struct Parameters {
     pattern_prob: HashMap<Token, f64>,
     /// prior distribution over pattern parameter
     pattern_prior: Beta,
+    /// number of transactions observed
+    number_transactions: Count,
 }
 
 #[derive( Debug )]
@@ -95,6 +97,7 @@ impl Model for BernoulliAssignment {
 	self.parameters.clear();
 	
 	let n = cover.number_transactions;
+	self.parameters.set_number_transactions( n );
 	for item in &self.universe {
 	    let occur_not_cover_count = cover.get_item_cover_count( *item, true, false );
 	    let not_occur_not_cover_count = cover.get_item_cover_count( *item, false, false );
@@ -332,9 +335,14 @@ impl Parameters {
 	    add_item_prior: Beta::new( 1.0, 1.0 ).unwrap(),
 	    kill_item_prior: Beta::new( 1.0, 1.0 ).unwrap(),
 	    pattern_prior: Beta::new( 1.0, 1.0 ).unwrap(),
+	    number_transactions: 0,
 	}
     }
 
+    pub fn set_number_transactions( &mut self, number_transactions: Count ) {
+	self.number_transactions = number_transactions;
+    }
+    
     pub fn set_additive_bias( &mut self, positive_bias: Count, negative_bias: Count ) {
 	// Shape parameters >= 1.0 can be interpreted as prior "pseudo-samples"
 	let a_shape = positive_bias as f64 + 1.0;
@@ -347,7 +355,11 @@ impl Parameters {
     }
     
     pub fn get_additive_noise( &self, item: Item ) -> f64 {
-	self.add_item_noise.get( &item ).map_or( 0.0, |p| *p )
+	let calc_unseen = || {
+	    let (bias_on, bias_off) = self.get_additive_bias();
+	    calc_prob(bias_on, self.number_transactions + bias_off)
+	};
+	self.add_item_noise.get( &item ).map_or_else( calc_unseen, |p| *p )
     }
 
     pub fn set_additive_noise( &mut self, item: Item, probability: f64 ) {
@@ -389,7 +401,12 @@ impl Parameters {
     }
 
     pub fn get_destructive_noise( &self, item: Item ) -> f64 {
-	self.kill_item_noise.get( &item ).map_or( 0.0, |p| *p )
+	let calc_unseen = || {
+	    let (bias_on, bias_off) = self.get_destructive_bias();
+	    // never seen, so never covered too much
+	    calc_prob( bias_on, bias_off )
+	};
+	self.kill_item_noise.get( &item ).map_or_else( calc_unseen, |p| *p )
     }
 
     pub fn set_destructive_noise( &mut self, item: Item, probability: f64 ) {
@@ -698,12 +715,28 @@ mod test {
 	let mut model = BernoulliAssignment::new( &universe );
 	model.fit( &cover );
 
-	assert_approx!( model.parameters.get_additive_noise( 0 ), 0.0, 0.01 );
-	assert_approx!( model.parameters.get_additive_noise( 1 ), 1.0, 0.01 );
-	assert_approx!( model.parameters.get_additive_noise( 2 ), 3.0 / 4.0, 0.01 );
-	assert_approx!( model.parameters.get_additive_noise( 3 ), 0.5, 0.01 );
+	let mut param = Parameters::new();
+	/* fit for data
+	   1 2 3
+	   1 2
+	   1 3
+	   1 2
+	*/
+	param.set_number_transactions( 4 );
+	param.set_additive_bias( 1, 2 );
+	param.set_destructive_bias( 1, 2 );
+	param.fit_additive_noise_map(0, 0, 4);
+	param.fit_additive_noise_map(1, 4, 0);
+	param.fit_additive_noise_map(2, 3, 1);
+	param.fit_additive_noise_map(3, 2, 2);
+
+	let denom = 4.0 + 3.0;
+	assert_approx!( param.get_additive_noise( 0 ), 1.0 / denom, 0.01 );
+	assert_approx!( param.get_additive_noise( 1 ), 5.0 / denom, 0.01 );
+	assert_approx!( param.get_additive_noise( 2 ), 4.0 / denom, 0.01 );
+	assert_approx!( param.get_additive_noise( 3 ), 3.0 / denom, 0.01 );
 	// as representative for all the others
-	assert_approx!( model.parameters.get_destructive_noise( 0 ), 0.0, 0.01 );
+	assert_approx!( param.get_destructive_noise( 0 ), 1.0 / 3.0, 0.01 );
     }
 
     #[test]
@@ -727,6 +760,7 @@ mod test {
 
 	let mut model = BernoulliAssignment::new( &universe );
 	// can it handle no zero noise items?
+	model.parameters.set_number_transactions( 4 );
 	model.parameters.set_additive_noise( 0, 0.0 );
 	model.parameters.set_additive_noise( 1, 0.6 );
 	model.parameters.set_additive_noise( 2, 0.4 );
@@ -788,6 +822,7 @@ mod test {
 	let data: Vec<Transaction> = data.iter().map( |t| vector_to_bitset( t )).collect();
 
 	let mut model = BernoulliAssignment::new( &universe );
+	model.parameters.set_number_transactions( 6 );
 	model.parameters.set_additive_noise( 0, 0.5 );
 	model.parameters.set_destructive_noise( 0, 0.25 );
 	model.parameters.set_additive_noise( 1, 0.75 );
@@ -964,6 +999,7 @@ mod test {
 	}
 
 	let mut parameters = Parameters::new(); // we only need the additive noise parameters
+	parameters.set_number_transactions( 7 );
 	parameters.fit_additive_noise_map( 0, 6, 4 );
 	parameters.fit_additive_noise_map( 1, 9, 1 );
 	parameters.fit_additive_noise_map( 2, 7, 3 );
@@ -988,6 +1024,7 @@ mod test {
 	let mut param = Parameters::new();
 	let (noise_plus_bias, noise_min_bias, noise_total_bias) = (1, 2, 3);
 	let (pattern_plus_bias, pattern_min_bias, pattern_total_bias) = (1, 1, 2);
+	param.set_number_transactions( 6 );
 	param.set_additive_bias( noise_plus_bias, noise_min_bias );
 	param.set_destructive_bias( noise_plus_bias, noise_min_bias );
 	param.set_pattern_bias( pattern_plus_bias, pattern_min_bias );
