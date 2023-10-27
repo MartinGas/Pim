@@ -1,4 +1,6 @@
 
+use std::time::*;
+
 use crate::*;
 use crate::io::PrettyFormatter;
 
@@ -23,11 +25,14 @@ impl <'a, D: Database, M: Model> Miner<'a, D, M> for EmMiner<D,M> where
 	let mut iteration = 0;
 	while last_loglik < loglik {
 	    iteration += 1;
+	    let iteration_start_time = Instant::now();
 	    let _iteration_span = info_span!( "iteration", number = iteration );
+
 	    last_loglik = loglik;
 	    loglik = self.iterate( model, data, loglik );
 
-	    info!( "Likelihood changed from {last_loglik:.3} to {loglik:.3}" );
+	    let iteration_duration = Instant::now().duration_since( iteration_start_time );
+	    info!( "Likelihood changed from {last_loglik:.3} to {loglik:.3} [took {}s]", iteration_duration.as_secs() );
 	    if let Some(formatter) = &self.model_formatter {
 		debug!( "{}", formatter.format_pretty( model ));
 	    }
