@@ -1,4 +1,3 @@
-
 use tracing;
 use tracing_subscriber;
 
@@ -8,17 +7,18 @@ use io::{read_data, parse_fimi_to_vec};
 
 fn main() -> Result<(), String>{
     let tracer = tracing_subscriber::fmt::fmt()
-        .with_max_level( tracing_subscriber::filter::LevelFilter::DEBUG )
+        .with_max_level( tracing_subscriber::filter::LevelFilter::INFO )
 	.finish();
     tracing::subscriber::set_global_default( tracer ).map_err( |err| err.to_string() )?;
 
-    let data = read_data( "./data/penguins/penguins.fimi", |line| parse_fimi_to_vec( line, " " ) )?;
-    // let database = data::read_data( "./data/census/census.fimi" )?;
+    // let data = read_data( "./data/penguins/penguins.fimi", |line| parse_fimi_to_vec( line, " " ) )?;
+    let data = read_data( "./data/census/census.fimi", |line| parse_fimi_to_vec( line, " " ) )?;
 
-    let database = populate_trie_database( data );
+    let mut database = populate_trie_database( data );
+    database.set_max_cache_length( 5 );
     let universe: Vec<Item> = database.create_universe();
     let mut model = model::BernoulliAssignment::new( universe.iter() );
-    let mut miner = miner::EmMiner::new( 10 );
+    let mut miner = miner::EmMiner::new( 1000 );
 
     let mut formatter = model::BernoulliFormatter::new();
     formatter.show_patterns();

@@ -15,7 +15,7 @@ fn main() -> Result<(), String> {
     let data = io::read_data(  "./data/census/census.fimi", |line| io::parse_fimi_to_vec( line, " " ))?;
     let data: Vec<Itemvec> = data.collect();
     // let frequencies = pre::calculate_item_frequency( &data );
-    let mut database = LinkedTrieBackedDatabase::new( &data );
+    let mut database = LinkedTrieBackedDatabase::new_with_frequency_order( &data );
     database.add( &data );
 
     let n = 5000;
@@ -84,6 +84,7 @@ fn generate_random_query( universe: &mut Itemvec, length: usize ) -> Itemvec {
 	// move i into sample count place to avoid drawing it again
 	universe.swap( sample_count, i );
     }
+    query.sort(); // canonical representation
     query
 }
 
