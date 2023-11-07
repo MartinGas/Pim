@@ -4,23 +4,33 @@ mod edge_list;
 use std::hash::Hash;
 use std::collections::{self, HashMap};
 use std::default::Default;
+use std::ops::DerefMut;
 
 use bit_set::BitSet;
 
 use super::{Count, Item};
-use edge_list::EdgeList;
+use super::skip_graph;
+
 
 /// Trie with natural ordering of Items
-pub struct Trie {
-    root: Node<EdgeList, <EdgeList as Link>::Edge>,
+pub struct Trie<L: Link> {
+    root: Node<L, L::Edge>,
+    node_builder: Box<dyn NodeBuilder<L, L::Edge>>,
 }
 
+/// Trie variants for external use
+pub type EdgeListTrie = Trie<edge_list::EdgeList>;
+pub type SkipGraphTrie = Trie<skip_graph::SkipGraph>;
+
 /// wraps an interator to hide the internal generic parameters
-pub struct TrieIterator<'a> {
-    iterator: NodeIterator<&'a Node<EdgeList, <EdgeList as Link>::Edge>,
-			   <&'a EdgeList as IntoIterator>::IntoIter,
-			   Box<dyn Consumer<&'a ItemVec>>>,
+pub struct TrieIterator<'a, L: Link + 'a> where &'a L: IntoIterator {
+    iterator: NodeIterator<&'a Node<L, L::Edge>,
+			   <&'a L as IntoIterator>::IntoIter,
+			   Box<dyn Consumer<ItemVec>>>,
 }
+
+/// Iterator variants for external use
+pub type EdgeListTrieIterator<'a> = TrieIterator<'a, edge_list::EdgeList>;
 
 /// Types that consume sequences fed in chunks to them during the traversal.
 pub trait Consumer<L> {
@@ -29,6 +39,12 @@ pub trait Consumer<L> {
     /// Notifies the consumer that the traversal leaves the current node
     fn leave( &mut self );
 }
+
+trait NodeBuilder<L, E> {
+    fn build( &self, support: Count ) -> Node<L, E>;
+}
+
+struct DefaultNodeBuilder;
 
 /// stores edges to children
 struct Node<L, E> {
@@ -56,7 +72,7 @@ type ItemSeq<'a> = &'a [Item];
 type ItemVec = Vec<Item>;
 
 /// Collection of edges labeled by ordered item sets.
-trait Link {
+pub trait Link {
     type Edge; // representation of an edge
 
     /// returns the edge that matches the subset query and the remainder of the query
@@ -82,19 +98,18 @@ trait Link {
 
 type EdgeOf<L> = <L as Link>::Edge;
 
-impl Trie {
+impl Trie<edge_list::EdgeList> {
+    pub fn new_with_edgelist() -> Trie<edge_list::EdgeList> {
+	let node_builder = DefaultNodeBuilder;
+	let root = node_builder.build( 0 );
+	Trie{ root,
+	      node_builder: Box::new( node_builder ),
+	}
+    }    
+}
 
-    pub fn new() -> Trie {
-	Trie{ root: Node::new( 0 ) }
-    }
-
-    // used for debugging
-    #[allow(dead_code)]
-    pub fn print( &self ) {
-	let mut buf = Vec::new();
-	self.root.print( &mut buf )
-    }
-
+impl <L: Link> Trie<L> where L::Edge: Eq + Hash + Clone {
+    
     /// Returns the support count of the subset query.
     pub fn query_subset_support( &self , mut query: Vec<Item> ) -> Count {
 	query.sort();
@@ -109,61 +124,83 @@ impl Trie {
     /// Adds transaction t to the trie, increasing all supports by count
     pub fn add( &mut self, mut transaction: Vec<Item>, count: Count ) {
 	transaction.sort();
-	self.root.add( &transaction, count )
+	self.root.add( &transaction, count, self.node_builder.as_ref() )
+    }
+    
+}
+
+impl <'a, L: Link + 'a> Trie<L> where
+    &'a L: IntoIterator<Item = (L::Edge, ItemVec)>,
+    L::Edge: Eq + Hash + Clone
+{
+
+    // used for debugging
+    #[allow(dead_code)]
+    pub fn print( &'a self ) {
+	let mut buf = Vec::new();
+	self.root.print( &mut buf )
     }
 
     #[allow(dead_code)]
-    pub fn iterate <'a> ( &'a self ) -> TrieIterator<'a> {
+    pub fn iterate( &'a self ) -> TrieIterator<'a, L> {
 	TrieIterator::new( &self.root )
     }
 
-    pub fn iterate_with_consumer <'a, C> ( &'a self, consumer: C ) -> TrieIterator<'a> where
-	C: Consumer<&'a ItemVec> + 'static
+    pub fn iterate_with_consumer <C> ( &'a self, consumer: C ) -> TrieIterator<'a, L> where
+	C: Consumer<ItemVec> + 'static,
     {
 	TrieIterator::new_with_consumer( &self.root, consumer )
     }
 }
 
-impl <'a> TrieIterator<'a> {
+impl <'a, L: Link> TrieIterator<'a, L> where &'a L: IntoIterator + 'a {
     #[allow(dead_code)]
-    fn new( start: &'a Node<EdgeList, EdgeOf<EdgeList>> ) -> TrieIterator<'a> {
+    fn new( start: &'a Node<L, L::Edge> ) -> TrieIterator<'a, L> {
 	TrieIterator{ iterator: NodeIterator::new( start, None ) }
     }
 
-    fn new_with_consumer <C> ( start: &'a Node<EdgeList, EdgeOf<EdgeList>>, consumer: C ) -> TrieIterator<'a> where
-	C: Consumer<&'a ItemVec> + 'static,
+    fn new_with_consumer <C> ( start: &'a Node<L, L::Edge>, consumer: C ) -> TrieIterator<'a, L> where
+	C: Consumer<ItemVec> + 'static
     {
 	let consumer = Box::new( consumer );
 	TrieIterator{ iterator: NodeIterator::new( start, Some( consumer )) }
     }
 }
 
-impl <'a> Iterator for TrieIterator<'a> {
-    type Item = (&'a ItemVec, Count);
+impl <'a, L: Link + 'a> Iterator for TrieIterator<'a, L> where
+    &'a L: IntoIterator<Item = (L::Edge, ItemVec)>,
+    L::Edge: Eq + Hash + Clone,
+{
+    type Item = (ItemVec, Count);
 
     fn next( &mut self ) -> Option<Self::Item> {
 	self.iterator.next()
     }
 }
 
+impl <L: Default, E> NodeBuilder<L, E> for DefaultNodeBuilder {
+    fn build( &self, support: Count ) -> Node<L, E> {
+	Node::new( support, L::default() )
+    }
+}
 
 impl <L, E> Node<L, E> {
     pub fn get_support( &self ) -> Count { self.support }
     pub fn get_edges( &self ) -> &L { &self.edges }
 }
 
-impl <L: Default, E> Node<L, E> {
+impl <L, E> Node<L, E> {
 
-    pub fn new( support: Count ) -> Node<L, E> {
+    pub fn new( support: Count, edges: L ) -> Node<L, E> {
 	Node{
 	    support,
-	    edges: Default::default(),
+	    edges,
 	    children: HashMap::new(),
 	}
     }
 }
 
-impl <L: Link> Node<L, L::Edge> where L::Edge: Eq + Hash {
+impl <L: Link> Node<L, L::Edge> where L::Edge: Eq + Hash + Clone {
 
     pub fn get_child( &self, edge: &L::Edge ) -> Option<&Node<L, L::Edge>> {
 	self.children.get( edge )
@@ -208,40 +245,8 @@ impl <L: Link> Node<L, L::Edge> where L::Edge: Eq + Hash {
 	}
     }
 
-    
-
-    /// Pushes a prefix down to the child
-    /// Pre: there is no edge for the given edge_label
-    fn push( &mut self, edge_label: ItemSeq, child: Node<L, L::Edge> ) {
-	let edge = self.edges.add( edge_label );
-	assert!( !self.children.contains_key( &edge ) ); // there is a slot for every edge
-	self.children.insert( edge, child );
-    }
-
-    /// Prints the items at this node and the support
-    /// Used for debugging.
-    #[allow(dead_code)]
-    pub fn print <'a> ( &'a self, items: &mut ItemVec ) where
-	&'a L: IntoIterator<Item = (&'a L::Edge, &'a ItemVec)> {
-	println!( "{} : {}", format_items( items.iter() ), self.support );
-
-	let edges: &L = &self.edges;
-	for (edge, label) in edges.into_iter() {
-	    assert!( self.children.contains_key( edge ));
-	    for item in label {
-		items.push( *item );
-	    }
-	    self.children[ edge ].print( items );
-	    for _ in label {
-		items.pop();
-	    }
-	}
-    }
-}
-
-impl <L: Default + Link> Node<L, L::Edge> where L::Edge: Eq + Hash + Clone {
-    /// Extends an existing branch or creates a new one
-    pub fn add( &mut self, transaction: ItemSeq, count: Count ) {
+        /// Extends an existing branch or creates a new one
+    pub fn add( &mut self, transaction: ItemSeq, count: Count, node_builder: & dyn NodeBuilder<L, L::Edge> ) {
 	self.support += count;
 	if transaction.is_empty() {
 	    return;
@@ -256,24 +261,56 @@ impl <L: Default + Link> Node<L, L::Edge> where L::Edge: Eq + Hash + Clone {
 	    if !is_complete {
 		// Only part of the prefix matched, so we need to introduce an new node to branch in between.
 		let excess = self.edges.split( &edge, add_pos );
-		let intermediate = Node::new( 0 ); // set correct support later
+		let intermediate = node_builder.build( 0 ); // set correct support later
 		// push the current child down to intermediate
 		let pushed_down_child = self.children.insert( edge.clone(), intermediate ).expect( "Push down existing child" );
 		let intermediate = self.children.get_mut( &edge ).expect( "Inserted intermediate child" );
 		intermediate.support = pushed_down_child.support;
 		intermediate.push( &excess, pushed_down_child );
-		intermediate.add( remainder, count );
+		intermediate.add( remainder, count, node_builder );
 	    } else {
 		let child = self.children.get_mut( &edge ).expect( "Edge leads to child" );
-		child.add( remainder, count );
+		child.add( remainder, count, node_builder );
 	    }
 	} else {
 	    // we need a new edge and node
 	    let edge = self.edges.add( &transaction );
 	    assert!( !self.children.contains_key( &edge ) );
-	    self.children.insert( edge, Node::new( count ));
+	    self.children.insert( edge, node_builder.build( count ));
 	}
     }
+
+    /// Pushes a prefix down to the child
+    /// Pre: there is no edge for the given edge_label
+    fn push( &mut self, edge_label: ItemSeq, child: Node<L, L::Edge> ) {
+	let edge = self.edges.add( edge_label );
+	assert!( !self.children.contains_key( &edge ) ); // there is a slot for every edge
+	self.children.insert( edge, child );
+    }
+
+    /// Prints the items at this node and the support
+    /// Used for debugging.
+    #[allow(dead_code)]
+    pub fn print <'a> ( &'a self, items: &mut ItemVec ) where
+	&'a L: IntoIterator<Item = (L::Edge, ItemVec)> {
+	println!( "{} : {}", format_items( items.iter() ), self.support );
+
+	let edges: &L = &self.edges;
+	for (edge, label) in edges.into_iter() {
+	    assert!( self.children.contains_key( &edge ));
+	    for item in &label {
+		items.push( *item );
+	    }
+	    self.children[ &edge ].print( items );
+	    for _ in label {
+		items.pop();
+	    }
+	}
+    }
+}
+
+impl <L: Link> Node<L, L::Edge> where L::Edge: Eq + Hash + Clone {
+
 }
 
 impl <'a, L, E, C> NodeIterator<&'a Node<L, E>, <&'a L as IntoIterator>::IntoIter, C> where &'a L: IntoIterator {
@@ -287,10 +324,16 @@ impl <'a, L, E, C> NodeIterator<&'a Node<L, E>, <&'a L as IntoIterator>::IntoIte
     }
 }
 
-impl <'a, C> NodeIterator<&'a Node<EdgeList, <EdgeList as Link>::Edge>, <&'a EdgeList as IntoIterator>::IntoIter, C> where
-    C: Consumer<&'a ItemVec>
+// impl <'a, C> NodeIterator<&'a Node<edge_list::EdgeList, <edge_list::EdgeList as Link>::Edge>, <&'a EdgeList as IntoIterator>::IntoIter, C> where
+//     C: Consumer<&'a ItemVec>
+// lifetimes:
+// 'eg is borrow of edges for the purpose of iteration
+// 'a is a temporary borrow for the time of the method only
+impl <'eg, 'a, L: Link, C> NodeIterator<&'eg Node<L, L::Edge>, <&'eg L as IntoIterator>::IntoIter, C> where
+    &'eg L: IntoIterator,
+    C: DerefMut<Target = dyn Consumer<ItemVec>>,
 {
-    fn enter( &mut self, child: &'a Node<EdgeList, EdgeOf<EdgeList>>, label: &'a ItemVec ) {
+    fn enter( &mut self, child: &'eg Node<L, L::Edge>, label: ItemVec ) {
 	if let Some( consumer ) = &mut self.consumer {
 	    consumer.enter( label );
 	}
@@ -307,11 +350,13 @@ impl <'a, C> NodeIterator<&'a Node<EdgeList, <EdgeList as Link>::Edge>, <&'a Edg
     }
 }
 
-impl <'a, C> Iterator for NodeIterator<&'a Node<EdgeList, <EdgeList as Link>::Edge>, <&'a EdgeList as IntoIterator>::IntoIter, C> where
-    C: Consumer<&'a ItemVec>
+impl <'eg, 'a, L: Link, C> Iterator for NodeIterator<&'eg Node<L, L::Edge>, <&'eg L as IntoIterator>::IntoIter, C> where
+    &'eg L: IntoIterator<Item = (L::Edge, ItemVec)>,
+    C: DerefMut<Target = dyn Consumer<ItemVec>>,
+    L::Edge: Eq + Hash + Clone,
 {
 
-    type Item = (&'a ItemVec, Count);
+    type Item = (ItemVec, Count);
 
     fn next(&mut self) -> Option<Self::Item> {
 	if self.visit_stack.is_empty() { // nothing more to see
@@ -322,11 +367,11 @@ impl <'a, C> Iterator for NodeIterator<&'a Node<EdgeList, <EdgeList as Link>::Ed
 
 	// use the next down-edge if possible
 	if let Some( (edge, label) ) = edge_iterator.next() {
-	    let child = node.get_child( edge ).expect( "every edge connects to a child" );
+	    let child = node.get_child( &edge ).expect( "every edge connects to a child" );
 	    // get the info needed
 	    let count = child.get_support();
 	    // push
-	    self.enter( child, label );
+	    self.enter( child, label.clone() );
 	    return Some( (label, count) );
 	}
 
@@ -335,6 +380,42 @@ impl <'a, C> Iterator for NodeIterator<&'a Node<EdgeList, <EdgeList as Link>::Ed
 	self.next()
     }
 }
+
+impl Link for skip_graph::SkipGraph {
+    // edges are represented by a sequence id
+    type Edge = usize;
+
+    fn select <'e, 'q> ( &'e self, query: ItemSeq<'q> ) -> Vec<(Self::Edge, ItemSeq<'q>)> {
+	let subsequence_to_visits = self.get_sequence_with_subsequence( &query );
+	let mut edge_and_remainder = Vec::with_capacity( subsequence_to_visits.len() );
+	for (edge, visits) in subsequence_to_visits {
+	    edge_and_remainder.push( (edge, &query[visits + 1 ..]) );
+	}
+	edge_and_remainder
+    }
+
+    fn walk( &self, sequence: ItemSeq ) -> Option<(Self::Edge, usize, bool)> {
+	let prefix_to_visits = self.get_sequence_with_prefix( &sequence );
+	// there is only one edge for every starting letter
+	assert!( prefix_to_visits.len() < 2 );
+	
+	for (edge, visits) in prefix_to_visits {
+	    return Some( (edge, visits, visits == sequence.len()) );
+	}
+	None
+    }
+
+    fn add( &mut self, label: ItemSeq ) -> Self::Edge {
+	self.add( label )
+    }
+
+    fn split( &mut self, edge: &Self::Edge, position: usize ) -> ItemVec {
+	assert!( position > 0 ); // skip graph cannot delete sequences (yet)
+	self.truncate( *edge, position - 1 )
+    }    
+}
+
+// delete the following functions?
 
 /// Returns next position in items after last match and indicates if the path may be a superset of items
 fn is_partial_superset( items: ItemSeq, path: &ItemVec ) -> (usize, bool) {
@@ -401,8 +482,8 @@ fn format_items <'a, I> ( items: I ) -> String where I: Iterator<Item = &'a Item
 mod test {
     use super::*;
 
-    pub fn build_trie_from_complete_data( data: &Vec<Vec<Item>> ) -> Trie {
-	let mut trie = Trie::new();
+    pub fn build_trie_from_complete_data( data: &Vec<Vec<Item>> ) -> EdgeListTrie {
+	let mut trie = Trie::new_with_edgelist();
 	for transaction in data {
 	    trie.add( transaction.clone(), 1 );
 	}

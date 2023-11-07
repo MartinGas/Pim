@@ -7,6 +7,10 @@ pub struct EdgeList {
     edges: HashMap<Item, ItemVec>,
 }
 
+pub struct HashMapIterAdaptor<'a> {
+    iter: collections::hash_map::Iter<'a, Item, ItemVec>,
+}
+
 impl Link for EdgeList {
     type Edge = Item;
 
@@ -57,10 +61,18 @@ impl Default for EdgeList {
 }
 
 impl <'a> IntoIterator for &'a EdgeList {
-    type Item = (&'a Item, &'a ItemVec);
-    type IntoIter = collections::hash_map::Iter<'a, Item, ItemVec>;
+    type Item = (<EdgeList as Link>::Edge, ItemVec);
+    type IntoIter = HashMapIterAdaptor<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
-	self.edges.iter()
+	HashMapIterAdaptor{ iter: self.edges.iter() }
+    }
+}
+
+impl <'a> Iterator for HashMapIterAdaptor<'a> {
+    type Item = (<EdgeList as Link>::Edge, ItemVec);
+
+    fn next(&mut self) -> Option<Self::Item> {
+	self.iter.next().map( |(edge, label)| (edge.clone(), label.clone()) )
     }
 }

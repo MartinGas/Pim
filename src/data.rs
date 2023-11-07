@@ -31,9 +31,9 @@ pub type DataPair = (Transaction, Count);
 
 /// Stores data as a linked trie with elements ordered by decreasing support.
 pub struct LinkedTrieBackedDatabase {
-    data: linked_trie::Trie,
+    data: linked_trie::EdgeListTrie,
     /// Caches past queries. RefCell'd for internal mutability.
-    cache: RefCell<linked_trie::Trie>,
+    cache: RefCell<linked_trie::EdgeListTrie>,
     /// maps original items to reordered items
     item_map: HashMap<Item, Item>,
     /// special bogus item that is appended to every transaction to mark its end
@@ -48,7 +48,7 @@ pub struct LinkedTrieSequenceIterator<'a> {
     /// access to the buffered sequence
     shared_sequence: ItemBuffer,
     /// internal trie iterator
-    iterator: linked_trie::TrieIterator<'a>,
+    iterator: linked_trie::EdgeListTrieIterator<'a>,
     /// special greatest item that marks the end of a sequence
     stop_item: Item,
 }
@@ -82,7 +82,7 @@ impl Database for LinkedTrieBackedDatabase {
 
 pub fn populate_trie_database<I>( data_generator: I ) -> LinkedTrieBackedDatabase where I: Iterator<Item = Itemvec> {
     let data: Vec<Itemvec> = data_generator.collect();
-    let mut database = LinkedTrieBackedDatabase::new( &data );
+    let mut database = LinkedTrieBackedDatabase::new_with_frequency_order( &data );
     database.add( &data );
     database
 }
@@ -93,7 +93,7 @@ impl <'a> IntoIterator for &'a LinkedTrieBackedDatabase {
 
     fn into_iter(self) -> Self::IntoIter {
 	let buffer: ItemBuffer = Rc::new( RefCell::new( Vec::new() ));
-	let consumer = SharedSequenceBuffer::new( buffer.clone() );
+	let mut consumer = SharedSequenceBuffer::new( buffer.clone() );
 	LinkedTrieSequenceIterator::new( self.data.iterate_with_consumer( consumer ), buffer, self.stop_item )
     }
 }
@@ -102,34 +102,39 @@ impl LinkedTrieBackedDatabase {
 
     // \todo rename into new_with_dynamic_order
     /// Initializes the data base with a sample that serves to determine the item order.
-    pub fn new <'a, D, T> ( sample: D ) -> LinkedTrieBackedDatabase where
+    pub fn new_with_frequency_order <'a, D, T> ( sample: D ) -> LinkedTrieBackedDatabase where
 	D: IntoIterator<Item = T>,
 	T: IntoIterator<Item = &'a Item>
     {
 	let item_stream = sample.into_iter().flat_map( |t| t.into_iter() );
 	let frequency_map: HashMap<Item, u64> = calc_item_frequencies( item_stream );
+	let frequency_map = map_by_score( &frequency_map );
+	let number_of_elements = frequency_map.len();
 
 	println!( "item map {:?}", map_by_score( &frequency_map ) );
-	
-	LinkedTrieBackedDatabase {
-	    data: linked_trie::Trie::new(),
-	    cache: RefCell::new( linked_trie::Trie::new() ),
-	    item_map: map_by_score( &frequency_map ),
-	    stop_item: frequency_map.len(), // stop at max_item + 1
-	    max_cache_length: 4,
-	}
+
+	Self::new( frequency_map, number_of_elements )
     }
 
     /// Initialize the data base with a fixed item order
     pub fn new_with_static_order( universe: &[Item] ) -> LinkedTrieBackedDatabase {
 	let stop_item = universe.iter().max().map( |item| *item ).unwrap_or( 0 ) + 1;
+	let item_map: HashMap<Item, Item> = universe.iter().copied().map( |item| (item, item) ).collect();
+	Self::new( item_map, stop_item )
+    }
+
+    pub fn new( item_map: HashMap<Item, Item>, stop_item: Item ) -> LinkedTrieBackedDatabase {
+
+	let data_trie = linked_trie::Trie::new_with_edgelist();
+	let cache_trie = linked_trie::Trie::new_with_edgelist();
+
 	LinkedTrieBackedDatabase {
-	    data: linked_trie::Trie::new(),
-	    cache: RefCell::new( linked_trie::Trie::new() ),
-	    item_map: universe.iter().map( |item| (*item, *item) ).collect(),
+	    data: data_trie,
+	    cache: RefCell::new( cache_trie ),
+	    item_map: item_map,
 	    stop_item,
 	    max_cache_length: 4,
-	}
+	}   
     }
 
     /// Creates a vector that contains all unique items in the data base
@@ -205,7 +210,7 @@ impl <'a> Iterator for LinkedTrieSequenceIterator<'a> {
 
 impl <'a> LinkedTrieSequenceIterator<'a> {
 
-    fn new( trie_iterator: linked_trie::TrieIterator<'a>, buffer: ItemBuffer, stop_item: Item ) -> LinkedTrieSequenceIterator<'a> {
+    fn new( trie_iterator: linked_trie::EdgeListTrieIterator<'a>, buffer: ItemBuffer, stop_item: Item ) -> LinkedTrieSequenceIterator<'a> {
 	LinkedTrieSequenceIterator{
 	    shared_sequence: buffer,
 	    iterator: trie_iterator,
@@ -238,13 +243,13 @@ impl SharedSequenceBuffer {
     }
 }
 
-impl <'a, L> linked_trie::Consumer<L> for SharedSequenceBuffer where L: IntoIterator<Item = &'a Item> {
+impl <L: 'static> linked_trie::Consumer<L> for SharedSequenceBuffer where for <'a> &'a L: IntoIterator<Item = &'a Item> + 'a {
 
     fn enter( &mut self, label: L ) {
 	// push all elements from label
 	let mut sequence = self.shared_sequence.borrow_mut();
 	let len_before = sequence.len();
-	for item in label {
+	for item in &label {
 	    sequence.push( *item );
 	}
 	let delta = sequence.len() - len_before;
@@ -320,7 +325,7 @@ mod test {
 	expectations.insert( vec!( 0, 1, 2, 3 ), 1 );
 	expectations.insert( vec!( 0, 1, 2, 3, 4 ), 1 );
 
-	let mut database = LinkedTrieBackedDatabase::new( &data );
+	let mut database = LinkedTrieBackedDatabase::new_with_frequency_order( &data );
 	database.add( &data );
 
 	for (real_chunk, real_count) in database.into_iter() {
