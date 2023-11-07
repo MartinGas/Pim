@@ -9,12 +9,13 @@ use bit_set::BitSet;
 use crate::*;
 
 mod linked_trie;
-mod skip_graph;
 
 pub type Transaction = BitSet;
 pub type Query = Vec<Item>;
 pub type Count = u64;
 pub type Item = usize;
+
+use linked_trie::TrieInterface;
 
 pub trait Database {
 
@@ -30,10 +31,10 @@ pub trait Database {
 pub type DataPair = (Transaction, Count);
 
 /// Stores data as a linked trie with elements ordered by decreasing support.
-pub struct LinkedTrieBackedDatabase {
-    data: linked_trie::EdgeListTrie,
+pub struct LinkedTrieBackedDatabase<Td, Tc> {
+    data: Td,
     /// Caches past queries. RefCell'd for internal mutability.
-    cache: RefCell<linked_trie::EdgeListTrie>,
+    cache: RefCell<Tc>,
     /// maps original items to reordered items
     item_map: HashMap<Item, Item>,
     /// special bogus item that is appended to every transaction to mark its end
@@ -58,7 +59,7 @@ struct SharedSequenceBuffer {
     pop_stack: Vec<usize>,
 }
 
-impl Database for LinkedTrieBackedDatabase {
+impl <Td: TrieInterface, Tc: TrieInterface> Database for LinkedTrieBackedDatabase<Td, Tc> {
     
     fn add <'a, Con> ( &mut self, transactions: Con ) where
 	Con: IntoIterator<Item = &'a Itemvec>
@@ -80,62 +81,62 @@ impl Database for LinkedTrieBackedDatabase {
     }
 }
 
-pub fn populate_trie_database<I>( data_generator: I ) -> LinkedTrieBackedDatabase where I: Iterator<Item = Itemvec> {
-    let data: Vec<Itemvec> = data_generator.collect();
-    let mut database = LinkedTrieBackedDatabase::new_with_frequency_order( &data );
-    database.add( &data );
-    database
-}
+// pub fn populate_trie_database<I>( data_generator: I ) -> LinkedTrieBackedDatabase where I: Iterator<Item = Itemvec> {
+//     let data: Vec<Itemvec> = data_generator.collect();
+//     let mut database = LinkedTrieBackedDatabase::new_with_frequency_order( &data );
+//     database.add( &data );
+//     database
+// }
 
-impl <'a> IntoIterator for &'a LinkedTrieBackedDatabase {
-    type Item = DataPair;
-    type IntoIter = LinkedTrieSequenceIterator<'a>;
+// impl <'a, Td: TrieInterface, Tc: TrieInterface> IntoIterator for &'a LinkedTrieBackedDatabase<Td, Tc> {
+//     type Item = DataPair;
+//     type IntoIter = LinkedTrieSequenceIterator<'a>;
 
-    fn into_iter(self) -> Self::IntoIter {
-	let buffer: ItemBuffer = Rc::new( RefCell::new( Vec::new() ));
-	let consumer = SharedSequenceBuffer::new( buffer.clone() );
-	LinkedTrieSequenceIterator::new( self.data.iterate_with_consumer( consumer ), buffer, self.stop_item )
-    }
-}
+//     fn into_iter(self) -> Self::IntoIter {
+// 	let buffer: ItemBuffer = Rc::new( RefCell::new( Vec::new() ));
+// 	let consumer = SharedSequenceBuffer::new( buffer.clone() );
+// 	LinkedTrieSequenceIterator::new( self.data.iterate_with_consumer( consumer ), buffer, self.stop_item )
+//     }
+// }
 
-impl LinkedTrieBackedDatabase {
+impl <Td: TrieInterface, Tc: TrieInterface> LinkedTrieBackedDatabase<Td, Tc> {
 
     // \todo rename into new_with_dynamic_order
     /// Initializes the data base with a sample that serves to determine the item order.
-    pub fn new_with_frequency_order <'a, D, T> ( sample: D ) -> LinkedTrieBackedDatabase where
-	D: IntoIterator<Item = T>,
-	T: IntoIterator<Item = &'a Item>
-    {
-	let item_stream = sample.into_iter().flat_map( |t| t.into_iter() );
-	let frequency_map: HashMap<Item, u64> = calc_item_frequencies( item_stream );
-	let frequency_map = map_by_score( &frequency_map );
-	let number_of_elements = frequency_map.len();
+    // pub fn new_with_frequency_order <'a, D, T> ( sample: D ) -> LinkedTrieBackedDatabase where
+    // 	D: IntoIterator<Item = T>,
+    // 	T: IntoIterator<Item = &'a Item>
+    // {
+    // 	let item_stream = sample.into_iter().flat_map( |t| t.into_iter() );
+    // 	let frequency_map: HashMap<Item, u64> = calc_item_frequencies( item_stream );
+    // 	let frequency_map = map_by_score( &frequency_map );
+    // 	let number_of_elements = frequency_map.len();
 
-	println!( "item map {:?}", map_by_score( &frequency_map ) );
+    // 	println!( "item map {:?}", map_by_score( &frequency_map ) );
 
-	Self::new( frequency_map, number_of_elements )
-    }
+    // 	Self::new( frequency_map, number_of_elements )
+    // }
 
     /// Initialize the data base with a fixed item order
-    pub fn new_with_static_order( universe: &[Item] ) -> LinkedTrieBackedDatabase {
-	let stop_item = universe.iter().max().map( |item| *item ).unwrap_or( 0 ) + 1;
-	let item_map: HashMap<Item, Item> = universe.iter().copied().map( |item| (item, item) ).collect();
-	Self::new( item_map, stop_item )
-    }
+    // pub fn new_with_static_order( universe: &[Item] ) -> LinkedTrieBackedDatabase {
+    // 	let stop_item = universe.iter().max().map( |item| *item ).unwrap_or( 0 ) + 1;
+    // 	let item_map: HashMap<Item, Item> = universe.iter().copied().map( |item| (item, item) ).collect();
+    // 	Self::new( item_map, stop_item )
+    // }
 
-    pub fn new( item_map: HashMap<Item, Item>, stop_item: Item ) -> LinkedTrieBackedDatabase {
+    // pub fn new( item_map: HashMap<Item, Item>, stop_item: Item ) -> LinkedTrieBackedDatabase {
 
-	let data_trie = linked_trie::Trie::new_with_edgelist();
-	let cache_trie = linked_trie::Trie::new_with_edgelist();
+    // 	let data_trie = linked_trie::Trie::new_with_edgelist();
+    // 	let cache_trie = linked_trie::Trie::new_with_edgelist();
 
-	LinkedTrieBackedDatabase {
-	    data: data_trie,
-	    cache: RefCell::new( cache_trie ),
-	    item_map: item_map,
-	    stop_item,
-	    max_cache_length: 4,
-	}   
-    }
+    // 	LinkedTrieBackedDatabase {
+    // 	    data: data_trie,
+    // 	    cache: RefCell::new( cache_trie ),
+    // 	    item_map: item_map,
+    // 	    stop_item,
+    // 	    max_cache_length: 4,
+    // 	}   
+    // }
 
     /// Creates a vector that contains all unique items in the data base
     pub fn create_universe( &self ) -> Vec<Item> {

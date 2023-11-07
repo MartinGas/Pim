@@ -1,5 +1,6 @@
 
 mod edge_list;
+mod skip_graph;
 
 use std::hash::Hash;
 use std::collections::{self, HashMap};
@@ -9,8 +10,16 @@ use std::ops::DerefMut;
 use bit_set::BitSet;
 
 use super::{Count, Item};
-use super::skip_graph;
 
+pub trait TrieInterface {
+    /// Returns the support count of the subset query.
+    fn query_subset_support( &self , query: Vec<Item> ) -> Count;
+
+    fn query_prefix_support( &self, query: Vec<Item> ) -> Count;
+
+    /// Adds transaction t to the trie, increasing all supports by count
+    fn add( &mut self, transaction: Vec<Item>, count: Count );
+}
 
 /// Trie with natural ordering of Items
 pub struct Trie<L: Link> {
@@ -45,7 +54,6 @@ trait NodeBuilder<L, E> {
 }
 
 struct DefaultNodeBuilder;
-
 /// stores edges to children
 struct Node<L, E> {
     edges: L,
@@ -106,21 +114,34 @@ impl Trie<edge_list::EdgeList> {
     }    
 }
 
-impl <L: Link> Trie<L> where L::Edge: Eq + Hash + Clone {
+impl Trie<skip_graph::SkipGraph> {
+    pub fn new_with_skipgraph( number_of_items: usize ) -> SkipGraphTrie {
+	// simplify: every skip graph has all items as nodes
+	let node_builder = move |support| Node::new( support, skip_graph::SkipGraph::new( number_of_items ));
+	let root = node_builder.build( 0 );
+	Trie{ root,
+	      node_builder: Box::new( node_builder ),
+	}
+    }
+}
+
+impl <L: Link> TrieInterface for Trie<L> where L::Edge: Eq + Hash + Clone {
     
     /// Returns the support count of the subset query.
-    pub fn query_subset_support( &self , mut query: Vec<Item> ) -> Count {
+    fn query_subset_support( &self, query: Vec<Item> ) -> Count {
+	let mut query = query;
 	query.sort();
 	self.root.query_subset_support( &query )
     }
 
-    pub fn query_prefix_support( &self, mut query: Vec<Item> ) -> Count {
+    fn query_prefix_support( &self, query: Vec<Item> ) -> Count {
+	let mut query = query;
 	query.sort();
 	self.root.query_prefix_support( &query )
     }
 
     /// Adds transaction t to the trie, increasing all supports by count
-    pub fn add( &mut self, mut transaction: Vec<Item>, count: Count ) {
+    fn add( &mut self, mut transaction: Vec<Item>, count: Count ) {
 	transaction.sort();
 	self.root.add( &transaction, count, self.node_builder.as_ref() )
     }
@@ -179,6 +200,12 @@ impl <'a, L: Link + 'a> Iterator for TrieIterator<'a, L> where
 impl <L: Default, E> NodeBuilder<L, E> for DefaultNodeBuilder {
     fn build( &self, support: Count ) -> Node<L, E> {
 	Node::new( support, L::default() )
+    }
+}
+
+impl <F, L, E> NodeBuilder<L, E> for F where F: Fn(Count) -> Node<L, E> {
+    fn build( &self, support: Count ) -> Node<L, E> {
+	self( support )
     }
 }
 
@@ -322,8 +349,6 @@ impl <'a, L, E, C> NodeIterator<&'a Node<L, E>, <&'a L as IntoIterator>::IntoIte
     }
 }
 
-// impl <'a, C> NodeIterator<&'a Node<edge_list::EdgeList, <edge_list::EdgeList as Link>::Edge>, <&'a EdgeList as IntoIterator>::IntoIter, C> where
-//     C: Consumer<&'a ItemVec>
 // lifetimes:
 // 'eg is borrow of edges for the purpose of iteration
 // 'a is a temporary borrow for the time of the method only
