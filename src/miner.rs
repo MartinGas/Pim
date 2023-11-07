@@ -40,8 +40,6 @@ impl <'a, D: Database, M: Model> Miner<'a, D, M> for EmMiner<D,M> where
     }
 }
 
-
-
 impl <'a, D: Database, M: Model> EmMiner<D, M> where
     &'a D: IntoIterator<Item = DataPair> + 'a,
 {

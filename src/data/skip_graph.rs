@@ -104,14 +104,14 @@ impl SkipGraph {
     pub fn reconstruct( &self, sequence_identifier: usize ) -> Vec<Node> {
 	let mut sequence = Vec::new();
 	let mut node = self.first_nodes.iter().enumerate()
-	    .find( |(node, seqset)| seqset.contains( sequence_identifier ))
+	    .find( |(_node, seqset)| seqset.contains( sequence_identifier ))
 	    .unwrap().0; // sequence_identifier is valid and every sequence is non-empty
 
 	// follow the first edges labeled with seqid
 	loop {
 	    sequence.push( node ); 
 	    let next_node = self.first_edges[ node ].iter()
-		.find( |(to_node, seqset)| seqset.contains( sequence_identifier ));
+		.find( |(_to_node, seqset)| seqset.contains( sequence_identifier ));
 	    if next_node.is_none() { // no further edge
 		return sequence;
 	    }
@@ -210,30 +210,6 @@ impl SkipGraph {
 	}
 	
 	sequence_to_num_nodes
-    }
-
-    /// Traverses the graph along the edges provided by the edge function for the given initial selection and remaining sequence
-    /// Returns the set of sequences that match the traversal and the number of nodes visited.
-    fn traverse_by <'a, F> ( &'a self, initial_selection: BitSet, sequence: &[Node], edge_function: F ) -> (BitSet, usize) where F: Fn(&'a Self, Node, Node) -> Option<&'a BitSet> {
-	let mut selection = initial_selection;
-	let mut visits = if sequence.is_empty() { 0 } else { 1 };
-	// iterate over adjacent pairs of the sequence
-	for pos in 1 .. sequence.len() { 
-	    if selection.is_empty() { // no contiguous paths, return early
-		return (selection, visits);
-	    }
-
-	    let from_node = sequence[ pos - 1 ];
-	    let to_node = sequence[ pos ];
-	    let edge_labels = edge_function( &self, from_node, to_node );
-	    if edge_labels.is_none() {
-		return (BitSet::new(), visits); // no path forward
-	    }
-	    
-	    selection.intersect_with( edge_labels.unwrap() );
-	    visits += 1;
-	}
-	(selection, visits)
     }
 
     fn build_all_in_set( &self ) -> BitSet {

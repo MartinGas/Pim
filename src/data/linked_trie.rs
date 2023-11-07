@@ -96,8 +96,6 @@ pub trait Link {
     fn split( &mut self, edge: &Self::Edge, position: usize ) -> ItemVec;
 }
 
-type EdgeOf<L> = <L as Link>::Edge;
-
 impl Trie<edge_list::EdgeList> {
     pub fn new_with_edgelist() -> Trie<edge_list::EdgeList> {
 	let node_builder = DefaultNodeBuilder;

@@ -71,7 +71,7 @@ impl Database for LinkedTrieBackedDatabase {
 	};
     }
 
-    fn query_support( &self, mut query: Query ) -> Count {
+    fn query_support( &self, query: Query ) -> Count {
 	if query.len() < self.max_cache_length {
 	    self.query_cached( query )
 	} else {
@@ -93,7 +93,7 @@ impl <'a> IntoIterator for &'a LinkedTrieBackedDatabase {
 
     fn into_iter(self) -> Self::IntoIter {
 	let buffer: ItemBuffer = Rc::new( RefCell::new( Vec::new() ));
-	let mut consumer = SharedSequenceBuffer::new( buffer.clone() );
+	let consumer = SharedSequenceBuffer::new( buffer.clone() );
 	LinkedTrieSequenceIterator::new( self.data.iterate_with_consumer( consumer ), buffer, self.stop_item )
     }
 }

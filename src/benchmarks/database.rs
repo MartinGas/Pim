@@ -2,12 +2,12 @@ use tracing::{info,debug};
 use tracing_subscriber;
 
 use rand::prelude::*;
-use statrs::distribution::{DiscreteUniform, Binomial};
+use statrs::distribution::DiscreteUniform;
 
 use std::time::*;
 
 use transmine::*;
-use transmine::data::{self, LinkedTrieBackedDatabase};
+use transmine::data::LinkedTrieBackedDatabase;
 
 fn main() -> Result<(), String> {
     prepare_logging();
@@ -50,7 +50,7 @@ fn benchmark_uniform_queries( database: &LinkedTrieBackedDatabase, number_querie
     let mut query_time = Duration::new( 0, 0 );
     let number_buckets = 10;
     let mut query_time_buckets = vec!( Duration::new( 0, 0 ); number_buckets );
-    let mut query_count_buckets = vec!( 0; number_buckets );
+    let mut _query_count_buckets = vec!( 0; number_buckets );
 
     for _ in 0 .. number_queries {
 	let mut gen = thread_rng();
