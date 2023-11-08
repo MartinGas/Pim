@@ -5,6 +5,8 @@ use std::cmp::max;
 use bit_set::BitSet;
 use bit_vec::BitVec;
 
+use super::ItemVec;
+
 /// Stores a list of sequences as a graph.  A sequence is represented by its index in the list.
 /// There is a node for every symbol in the sequences. A node is represented by its index.  The set of nodes is fixed on construction.
 /// There is an edge (a,b,s) if a < b and s is a sequence where b occurs after a
@@ -22,6 +24,13 @@ pub struct SkipGraph {
     first_edges: Vec<EdgeMap>,
     /// Number of sequences stored
     number_sequences: usize,
+}
+
+pub struct SkipGraphIterator<'a> {
+    first_nodes: &'a Vec<BitSet>,
+    first_edges: &'a Vec<EdgeMap>,
+    start_node: usize,
+    sequence_iterator: <&'a BitSet as IntoIterator>::IntoIter,
 }
 
 type Node = usize;
@@ -219,9 +228,75 @@ impl SkipGraph {
     }
 }
 
+impl <'a> IntoIterator for &'a SkipGraph {
+    type Item = <SkipGraphIterator<'a> as Iterator>::Item;
+    type IntoIter = SkipGraphIterator<'a>;
+
+    fn into_iter( self ) -> Self::IntoIter {
+	SkipGraphIterator::new( &self.first_nodes, &self.first_edges )
+    }
+}
+
+impl <'a> SkipGraphIterator<'a> {
+
+    pub fn new( first_nodes: &'a Vec<BitSet>, first_edges: &'a Vec<EdgeMap> ) -> SkipGraphIterator<'a> {
+	SkipGraphIterator{ first_nodes, first_edges,
+			   start_node: 0,
+			   sequence_iterator: first_nodes[ 0 ].iter() }
+    }
+
+    /// Attempts to advance the top most iterator. Pops the stack until some iterator is not exhausted.
+    fn advance( &mut self ) -> Option<Sequence> {
+	// look for the next sequence
+	let next_seqid = self.sequence_iterator.next();
+	if let Some( seqid ) = next_seqid {
+	    return Some( seqid );
+	}
+
+	// Processed all sequences for the current node. Go to the next one.
+	self.start_node += 1;
+	if !(self.start_node < self.first_nodes.len()) { // Processed all nodes.
+	    return None;
+	}
+
+	// reset sequence iterator and recurse
+	self.sequence_iterator = self.first_nodes[ self.start_node ].iter();
+	self.advance()
+    }
+
+    fn follow( &self, seqid: Sequence ) -> ItemVec {
+	let mut sequence = Vec::new();
+	let mut node = self.start_node;
+	// jump along the first edge for the given sequence
+	loop {
+	    sequence.push( node );
+	    let next_node = self.first_edges[ node ].iter()
+		.find_map( |(node, seqset)| if seqset.contains( seqid ) { Some( node ) } else { None } );
+
+	    match next_node {
+		Some( next_node ) => node = *next_node,
+		None => return sequence,
+	    }
+	}
+    }
+}
+
+impl <'a> Iterator for SkipGraphIterator<'a> {
+    type Item = ItemVec;
+
+    fn next( &mut self ) -> Option<Self::Item> {
+	let next_seqid = self.advance();
+	match next_seqid {
+	    Some( seqid ) => Some( self.follow( seqid )),
+	    None => None,
+	}
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
+    use std::collections::HashSet;
     
     #[test]
     fn test_empty_prefix() {
@@ -316,6 +391,19 @@ mod test {
 	// part after truncation is gone
 	let subseq = graph.get_sequence_with_subsequence( &[1, 0] );
 	assert!( subseq.is_empty() );
+    }
+
+    #[test]
+    fn test_iterate() {
+	let num_nodes = 3;
+	let mut graph = SkipGraph::new( num_nodes );
+	graph.add( &vec!( 0, 1 ));
+	graph.add( &vec!( 1, 2 ));
+
+	let sequences: HashSet<ItemVec> = graph.into_iter().collect();
+	assert_eq!( sequences.len(), 2 );
+	assert!( sequences.contains( &vec!( 0, 1 )));
+	assert!( sequences.contains( &vec!( 1, 2 )));
     }
 
 
