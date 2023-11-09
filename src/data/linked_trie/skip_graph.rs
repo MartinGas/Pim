@@ -91,6 +91,8 @@ impl SkipGraph {
 
 	// reconstruct the sequence
 	let sequence = self.reconstruct( sequence_identifier );
+	// last node is earlier now
+	self.last_nodes[ sequence_identifier ] = sequence[ cut_index ];
 	// remove all edges for this sequence past the cut
 	for (pos, from_node) in sequence.iter().enumerate() {
 	    let start = max( pos + 1, cut_index + 1 );
@@ -129,9 +131,10 @@ impl SkipGraph {
 	}
     }
     
-    /// Returns a map of sequences with part of the prefix as their prefix. Sequence IDs map to the number of matching nodes.
-    pub fn get_sequence_with_prefix( &self, prefix: &[usize] ) -> HashMap<Sequence, usize> {
-	let mut sequence_to_num_nodes: HashMap<Sequence, usize> = HashMap::new();
+    /// Returns a map of sequences with part of the prefix as their prefix.
+    /// Sequence IDs map to the number of matching nodes and the indicator for the completeness of the prefix.
+    pub fn get_sequence_with_prefix( &self, prefix: &[usize] ) -> HashMap<Sequence, (usize, bool)> {
+	let mut sequence_to_num_nodes: HashMap<Sequence, (usize, bool)> = HashMap::new();
 	// get indicators for start node (no jump)
 	let mut prefix_set = match prefix.get( 0 ) {
 	    None => self.build_all_in_set(),
@@ -145,6 +148,7 @@ impl SkipGraph {
 	    
 	    let from_node = prefix[ pos - 1 ];
 	    let to_node = prefix[ pos ];
+
 	    // Determine sequences that fail to match. If there's no edge, all fail.
 	    let unmatching = match self.first_edges[ from_node ].get( &to_node ) {
 		Some( edge_label ) => {
@@ -158,13 +162,15 @@ impl SkipGraph {
 	    // Remove all unmatching and save as result.
 	    prefix_set.difference_with( &unmatching );
 	    for seqid in unmatching.iter() {
-		sequence_to_num_nodes.insert( seqid, pos );
+		// If the sequences stopped before the prefix ended, the prefix is complete.
+		let is_done = self.last_nodes[ seqid ] == from_node;
+		sequence_to_num_nodes.insert( seqid, (pos, is_done) );
 	    }
 	}
 
 	// Add all complete prefixes to the map.
 	for seqid in prefix_set.iter() {
-	    sequence_to_num_nodes.insert( seqid, prefix.len() );
+	    sequence_to_num_nodes.insert( seqid, (prefix.len(), true) );
 	}
 
 	sequence_to_num_nodes
@@ -178,8 +184,18 @@ impl SkipGraph {
 	// maintain which sequences remain to be checked
 	let mut open_set = match subsequence.get( 0 ) {
 	    None => self.build_all_in_set(),
-	    Some( front ) => self.nodes[ *front ].clone(),
+	    Some( front ) => {
+		// All sequences that are closed and whose last item is smaller than front have the subsequence too.
+		for (seqid, last_node) in self.last_nodes.iter().enumerate() {
+		    if last_node < front {
+			sequence_to_num_nodes.insert( seqid, 0 );
+		    }
+		}
+		self.nodes[ *front ].clone()
+	    }
 	};
+
+
 
 	// traverse the prefix until no more paths are available
 	for pos in 1 .. subsequence.len() {
@@ -282,12 +298,12 @@ impl <'a> SkipGraphIterator<'a> {
 }
 
 impl <'a> Iterator for SkipGraphIterator<'a> {
-    type Item = ItemVec;
+    type Item = (Sequence, ItemVec);
 
     fn next( &mut self ) -> Option<Self::Item> {
 	let next_seqid = self.advance();
 	match next_seqid {
-	    Some( seqid ) => Some( self.follow( seqid )),
+	    Some( seqid ) => Some( (seqid, self.follow( seqid )) ),
 	    None => None,
 	}
     }
@@ -307,9 +323,9 @@ mod test {
 
 	let prefix_set = skipgraph.get_sequence_with_prefix( &[] );
 	assert!( prefix_set.contains_key( &0 ));
-	assert_eq!( *prefix_set.get( &0 ).expect( "contains key 0" ), 0 );
+	assert_eq!( *prefix_set.get( &0 ).expect( "contains key 0" ), (0, true) );
 	assert!( prefix_set.contains_key( &1 ));
-	assert_eq!( *prefix_set.get( &1 ).expect( "contains key 1" ), 0 );
+	assert_eq!( *prefix_set.get( &1 ).expect( "contains key 1" ), (0, true) );
     }
 
     #[test]
@@ -322,9 +338,9 @@ mod test {
 
 	let prefix_set = skipgraph.get_sequence_with_prefix( &[0, 1] );
 	assert!( prefix_set.contains_key( &0 ));
-	assert_eq!( *prefix_set.get( &0 ).expect( "contains key 0" ), 2 );
+	assert_eq!( *prefix_set.get( &0 ).expect( "contains key 0" ), (2, true) );
 	assert!( prefix_set.contains_key( &1 ));
-	assert_eq!( *prefix_set.get( &1 ).expect( "contains key 1" ), 1 );
+	assert_eq!( *prefix_set.get( &1 ).expect( "contains key 1" ), (1, false) );
 	assert!( !prefix_set.contains_key( &2 ));
 
 	let prefix_set = skipgraph.get_sequence_with_prefix( &[1, 2] );
@@ -332,8 +348,63 @@ mod test {
 
 	let prefix_set = skipgraph.get_sequence_with_prefix( &[2, 3] );
 	assert!( prefix_set.contains_key( &2 ));
-	assert_eq!( *prefix_set.get( &2 ).expect( "contains key 2" ), 2 );
+	assert_eq!( *prefix_set.get( &2 ).expect( "contains key 2" ), (2, true) );
 	assert!( !prefix_set.contains_key( &1 ));
+
+	let prefix_set = skipgraph.get_sequence_with_prefix( &[0] );
+	assert_eq!( prefix_set.len(), 2 );
+	assert!( prefix_set.contains_key( &0 ));
+	assert_eq!( prefix_set[ &0 ], (1, true) );
+	assert!( prefix_set.contains_key( &1 ));
+	assert_eq!( prefix_set[ &1 ], (1, true) );
+    }
+
+    #[test]
+    fn test_larger_prefix() {
+	let mut skipgraph = SkipGraph::new( 4 );
+	skipgraph.add( &vec!( 0 ));
+	skipgraph.add( &vec!( 0, 1 ));
+
+	// test with a larger prefix than any of the sequences
+	let prefix_set = skipgraph.get_sequence_with_prefix( &[0, 5] );
+	assert!( prefix_set.contains_key( &0 ));
+	assert_eq!( *prefix_set.get( &0 ).expect( "contains key 0" ), (1, true) );
+	assert!( prefix_set.contains_key( &1 ));
+	assert_eq!( *prefix_set.get( &1 ).expect( "contains key 1" ), (1, false) );
+
+	let prefix_set = skipgraph.get_sequence_with_prefix( &[0, 1, 5] );
+	assert!( prefix_set.contains_key( &1 ));
+	assert_eq!( *prefix_set.get( &1 ).expect( "contains key 0" ), (2, true) );
+    }
+
+    #[test]
+    /// Test whether the terminal node is used correctly to determine if a sequence is closed
+    fn test_touching_prefix() {
+	let mut skipgraph = SkipGraph::new( 4 );
+	skipgraph.add( &vec!( 0, 1, 2 ));
+	// skipgraph.add( &vec!( 0, 2, 3 ));
+
+	let prefix_set = skipgraph.get_sequence_with_prefix( &[0, 2, 3] );
+	assert!( prefix_set.contains_key( &0 ));
+	assert_eq!( prefix_set[ &0 ], (1, false) );
+
+	let prefix_set = skipgraph.get_sequence_with_prefix( &[0, 3] );
+	assert!( prefix_set.contains_key( &0 ));
+	assert_eq!( prefix_set[&0], (1, false) );
+    }
+
+    #[test]
+    /// If we truncate a larger sequence, some traces are left.
+    /// Check that we still correctly determine whether a sequence has ended
+    fn test_truncate_prefix() {
+	let mut graph = SkipGraph::new( 3 );
+	graph.add( &vec!( 0, 1, 2 ));
+	graph.truncate( 0, 0 );
+
+	// After truncating past index 0 we are left with sequence [0] so [0,1] is a complete partial prefix.
+	let prefix_set = graph.get_sequence_with_prefix( &[0, 1] );
+	assert!( prefix_set.contains_key( &0 ));
+	assert_eq!( prefix_set[ &0 ], (1, true) );
     }
 
     #[test]
@@ -364,6 +435,17 @@ mod test {
 	let subs = graph.get_sequence_with_subsequence( &[0, 3] );
 	assert!( subs.contains_key( &0 )); // 0 is closed before 3 occurs
 	assert_eq!( *subs.get( &0 ).unwrap(), 1 );
+    }
+
+    #[test]
+    fn test_non_overlapping_greater_subsequence() {
+	let num_nodes = 5;
+	let mut graph = SkipGraph::new( num_nodes );
+	graph.add( &vec!( 0, 1, 2 ));
+
+	let subs = graph.get_sequence_with_subsequence( &[3, 4] );
+	assert!( subs.contains_key( &0 ));
+	assert_eq!( subs[ &0 ], 0 );
     }
 
     #[test]
@@ -400,10 +482,10 @@ mod test {
 	graph.add( &vec!( 0, 1 ));
 	graph.add( &vec!( 1, 2 ));
 
-	let sequences: HashSet<ItemVec> = graph.into_iter().collect();
+	let sequences: HashSet<(Sequence, ItemVec)> = graph.into_iter().collect();
 	assert_eq!( sequences.len(), 2 );
-	assert!( sequences.contains( &vec!( 0, 1 )));
-	assert!( sequences.contains( &vec!( 1, 2 )));
+	assert!( sequences.contains( &(0, vec!( 0, 1 )) ));
+	assert!( sequences.contains( &(1, vec!( 1, 2 )) ));
     }
 
 
