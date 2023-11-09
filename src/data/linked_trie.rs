@@ -1,5 +1,6 @@
 
 mod edge_list;
+mod edge_list2;
 mod skip_graph;
 
 use std::hash::Hash;
@@ -12,6 +13,8 @@ use bit_set::BitSet;
 use super::{Count, Item};
 
 pub trait TrieInterface {
+    type Iterator<'a> where Self: 'a;
+
     /// Returns the support count of the subset query.
     fn query_subset_support( &self , query: Vec<Item> ) -> Count;
 
@@ -19,6 +22,9 @@ pub trait TrieInterface {
 
     /// Adds transaction t to the trie, increasing all supports by count
     fn add( &mut self, transaction: Vec<Item>, count: Count );
+
+    /// Iterates over the nodes and accumulate state with a comsumer
+    fn iterate_and_consume <'a, C> ( &'a self, consumer: C ) -> Self::Iterator<'a> where C: Consumer<ItemVec> + 'static;
 }
 
 /// Trie with natural ordering of Items
@@ -99,7 +105,7 @@ pub trait Link {
     /// Returns the created edge
     fn add( &mut self, label: ItemSeq ) -> Self::Edge;
 
-    /// Splits the edge from the given position onwards and returns the label split off
+    /// Splits the edge from the given index onwards and returns the label split off
     /// Pre: edge refers to a valid edge
     fn split( &mut self, edge: &Self::Edge, position: usize ) -> ItemVec;
 }
@@ -125,7 +131,11 @@ impl Trie<skip_graph::SkipGraph> {
     }
 }
 
-impl <L: Link> TrieInterface for Trie<L> where L::Edge: Eq + Hash + Clone {
+impl <L: Link> TrieInterface for Trie<L> where
+    L::Edge: Eq + Hash + Clone,
+    for<'a> &'a L: IntoIterator<Item = (L::Edge, ItemVec)>,
+{
+    type Iterator<'a> = TrieIterator<'a, L> where L: 'a;
     
     /// Returns the support count of the subset query.
     fn query_subset_support( &self, query: Vec<Item> ) -> Count {
@@ -143,13 +153,17 @@ impl <L: Link> TrieInterface for Trie<L> where L::Edge: Eq + Hash + Clone {
     /// Adds transaction t to the trie, increasing all supports by count
     fn add( &mut self, mut transaction: Vec<Item>, count: Count ) {
 	transaction.sort();
-	self.root.add( &transaction, count, self.node_builder.as_ref() )
+	self.root.add( &transaction, count, self.node_builder.as_ref() );
+    }
+
+    fn iterate_and_consume <'a, C> ( &'a self, consumer: C ) -> Self::Iterator<'a> where C: Consumer<ItemVec> + 'static {
+	TrieIterator::new_with_consumer( &self.root, consumer )
     }
     
 }
 
 impl <'a, L: Link + 'a> Trie<L> where
-    &'a L: IntoIterator<Item = (L::Edge, ItemVec)>,
+    for <'b> &'b L: IntoIterator<Item = (L::Edge, ItemVec)>,
     L::Edge: Eq + Hash + Clone
 {
 
@@ -171,6 +185,16 @@ impl <'a, L: Link + 'a> Trie<L> where
 	TrieIterator::new_with_consumer( &self.root, consumer )
     }
 }
+
+// impl <'a, L: Link + 'a> IntoIterator for &'a Trie<L> where
+//     &'a L: IntoIterator<Item = (L::Edge, ItemVec)>,
+// {
+//     type IntoIter = TrieIterator<'a, L>;
+
+//     fn into_iter(self) -> Self::IntoIter {
+// 	TrieIterator::new( &self.root )
+//     }
+// }
 
 impl <'a, L: Link> TrieIterator<'a, L> where &'a L: IntoIterator + 'a {
     #[allow(dead_code)]
@@ -284,15 +308,9 @@ impl <L: Link> Node<L, L::Edge> where L::Edge: Eq + Hash + Clone {
 
 	    // there is an edge
 	    if !is_complete {
-		// Only part of the prefix matched, so we need to introduce an new node to branch in between.
-		let excess = self.edges.split( &edge, add_pos );
-		let intermediate = node_builder.build( 0 ); // set correct support later
-		// push the current child down to intermediate
-		let pushed_down_child = self.children.insert( edge.clone(), intermediate ).expect( "Push down existing child" );
-		let intermediate = self.children.get_mut( &edge ).expect( "Inserted intermediate child" );
-		intermediate.support = pushed_down_child.support;
-		intermediate.push( &excess, pushed_down_child );
-		intermediate.add( remainder, count, node_builder );
+		let new_intermediate = node_builder.build( 0 );
+		self.split( new_intermediate, edge.clone(), add_pos );
+		self.children.get_mut( &edge ).expect( "replaced child" ).add( remainder, count, node_builder );
 	    } else {
 		let child = self.children.get_mut( &edge ).expect( "Edge leads to child" );
 		child.add( remainder, count, node_builder );
@@ -303,6 +321,20 @@ impl <L: Link> Node<L, L::Edge> where L::Edge: Eq + Hash + Clone {
 	    assert!( !self.children.contains_key( &edge ) );
 	    self.children.insert( edge, node_builder.build( count ));
 	}
+    }
+
+    /// Handles incomplete match where part of an edge needs to be split off while adding.
+    /// Replace the current child by new_intermediate and push down the child.
+    fn split( &mut self, new_intermediate: Node<L, L::Edge>, edge: L::Edge, split_pos: usize ) {
+	// Only part of the prefix matched, so we need to introduce an new node to branch in between.
+	let excess = self.edges.split( &edge, split_pos );
+	assert!( !excess.is_empty() );
+	
+	// push the current child down to intermediate
+	let pushed_down_child = self.children.insert( edge.clone(), new_intermediate ).expect( "Push down existing child" );
+	let new_intermediate = self.children.get_mut( &edge ).expect( "Inserted intermediate child" );
+	new_intermediate.support = pushed_down_child.support;
+	new_intermediate.push( &excess, pushed_down_child );
     }
 
     /// Pushes a prefix down to the child
@@ -412,7 +444,9 @@ impl Link for skip_graph::SkipGraph {
 	let subsequence_to_visits = self.get_sequence_with_subsequence( &query );
 	let mut edge_and_remainder = Vec::with_capacity( subsequence_to_visits.len() );
 	for (edge, visits) in subsequence_to_visits {
-	    edge_and_remainder.push( (edge, &query[visits + 1 ..]) );
+	    let remainder = &query[ visits .. ]; // unvisited 
+	    // let remainder = if visits < query.len() { &query[ visits + 1 ..] } else { &[] };
+	    edge_and_remainder.push( (edge, remainder) );
 	}
 	edge_and_remainder
     }
@@ -422,13 +456,14 @@ impl Link for skip_graph::SkipGraph {
 	// there is only one edge for every starting letter
 	assert!( prefix_to_visits.len() < 2 );
 	
-	for (edge, visits) in prefix_to_visits {
-	    return Some( (edge, visits, visits == sequence.len()) );
+	for (edge, (visits, is_complete)) in prefix_to_visits {
+	    return Some( (edge, visits, is_complete) );
 	}
 	None
     }
 
     fn add( &mut self, label: ItemSeq ) -> Self::Edge {
+	assert!( !label.is_empty() ); // handle empty labels
 	self.add( label )
     }
 
@@ -436,59 +471,6 @@ impl Link for skip_graph::SkipGraph {
 	assert!( position > 0 ); // skip graph cannot delete sequences (yet)
 	self.truncate( *edge, position - 1 )
     }    
-}
-
-// delete the following functions?
-
-/// Returns next position in items after last match and indicates if the path may be a superset of items
-fn is_partial_superset( items: ItemSeq, path: &ItemVec ) -> (usize, bool) {
-    let mut path_iter = path.iter();
-    let mut next_position = 0;
-
-    // check whether query items are on the path
-    for query_item in items.iter() {
-	let mut path_item = path_iter.next();
-	while path_item.map_or( false, |item| item < query_item ) {
-	    path_item = path_iter.next();
-	}
-
-	// all items on path are less than the current item
-	if path_item.is_none() {
-	    return (next_position, true);
-	}
-	let path_item = path_item.unwrap();
-	// next item on path is larger, so query item is not on path
-	if query_item < path_item {
-	    return (next_position, false);
-	}
-
-	assert!( query_item == path_item, "proceed if equal" );
-	next_position += 1;
-    }
-    (next_position, true)
-}
-
-/// returns next position in items after last match and indicates if the path is a prefix of items.
-fn is_prefix( items: ItemSeq, path: &ItemVec ) -> (usize, bool) {
-    let mut query_iter = items.iter();
-    let mut path_iter = path.iter();
-
-    let mut query_item = query_iter.next();
-    let mut path_item = path_iter.next();
-    let mut position = 0;
-    while query_item.is_some() && path_item.is_some() {
-	if query_item != path_item {
-	    return (position, false);
-	}
-
-	query_item = query_iter.next();
-	path_item = path_iter.next();
-	position += 1;
-    }
-
-    // all query items matched
-    // path is prefix if path iterator is exhausted
-    return (position, path_item.is_none())
 }
 
 // todo move it somewhere where it's useful
@@ -512,9 +494,9 @@ mod test {
 	}
 	trie
     }
-    
-    #[test]
-    fn add_and_query_subset_support() {
+
+    fn add_and_query_subset_support <T: TrieInterface > ( mut trie: T ) {
+	// number of items: 6 (last query asks for item 5)
 	let data = vec!(
 	    vec!( 1, 2, 3 ),
 	    vec!( 0, 2, 1 ),
@@ -522,8 +504,10 @@ mod test {
 	    vec!( 0, 2, 4 ),
 	    vec!( 4, 3, 1 )
 	);
+	for transaction in data {
+	    trie.add( transaction, 1 );
+	}
 
-	let trie = build_trie_from_complete_data( &data );
 	let expectations = vec!(
 	    (vec!( 0 ), 3),
 	    (vec!( 0, 1 ), 2),
@@ -538,17 +522,31 @@ mod test {
 	    assert_eq!( calculated, expected, "{}", format_items( items.iter() ) );
 	}
     }
+    
+    #[test]
+    fn test_edgelist_add_and_query_subset_support() {
+	let trie = Trie::new_with_edgelist();
+	add_and_query_subset_support( trie );
+    }
 
     #[test]
-    fn add_and_query_prefix_support() {
+    fn test_skipgraph_add_and_query_subset_support() {
+	let trie = Trie::new_with_skipgraph( 6 );
+	add_and_query_subset_support( trie );
+    }
+
+    fn add_and_query_prefix_support <T: TrieInterface> ( mut trie: T ) {
+	// number of items: 3
 	let data = vec!(
 	    vec!( 0 ),
 	    vec!( 0, 1 ),
 	    vec!( 0, 2 ),
 	    vec!( 2 )
 	);
+	for transaction in data {
+	    trie.add( transaction, 1 );
+	}
 
-	let trie = build_trie_from_complete_data( &data );
 	let expectations = vec!(
 	    (vec!( 0 ), 3),
 	    (vec!( 0, 1 ), 1),
@@ -560,5 +558,17 @@ mod test {
 	    let calculated = trie.query_prefix_support( prefix.clone() );
 	    assert_eq!( calculated, expected, "{prefix:?}" );
 	}
+    }
+
+    #[test]
+    fn test_edgelist_add_and_query_prefix_support() {
+	let trie = Trie::new_with_edgelist();
+	add_and_query_prefix_support( trie );
+    }
+
+    #[test]
+    fn test_skipgraph_add_and_query_prefix_support() {
+	let trie = Trie::new_with_skipgraph( 3 );
+	add_and_query_prefix_support( trie );
     }
 }
