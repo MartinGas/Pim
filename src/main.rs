@@ -2,7 +2,7 @@ use tracing;
 use tracing_subscriber;
 
 use transmine::*;
-use data::populate_trie_database;
+use data::*;
 use io::{read_data, parse_fimi_to_vec};
 
 fn main() -> Result<(), String>{
@@ -13,9 +13,13 @@ fn main() -> Result<(), String>{
 
     // let data = read_data( "./data/penguins/penguins.fimi", |line| parse_fimi_to_vec( line, " " ) )?;
     let data = read_data( "./data/census/census.fimi", |line| parse_fimi_to_vec( line, " " ) )?;
+    let data: Vec<Itemvec> = data.collect();
 
-    let mut database = populate_trie_database( data );
-    database.set_max_cache_length( 5 );
+    let mut database = LinkedTrieDatabaseBuilder::new( 0 );
+    database.remap_by_frequency( data.iter() );
+    let mut database = database.build_with_edgelist();
+    database.add( &data );
+    
     let universe: Vec<Item> = database.create_universe();
     let mut model = model::BernoulliAssignment::new( universe.iter() );
     let mut miner = miner::EmMiner::new( 1000 );

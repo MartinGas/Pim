@@ -7,7 +7,7 @@ use statrs::distribution::DiscreteUniform;
 use std::time::*;
 
 use transmine::*;
-use transmine::data::LinkedTrieBackedDatabase;
+use transmine::data::*;
 
 fn main() -> Result<(), String> {
     prepare_logging();
@@ -15,20 +15,34 @@ fn main() -> Result<(), String> {
     let data = io::read_data(  "./data/census/census.fimi", |line| io::parse_fimi_to_vec( line, " " ))?;
     let data: Vec<Itemvec> = data.collect();
     // let frequencies = pre::calculate_item_frequency( &data );
-    let mut database = LinkedTrieBackedDatabase::new_with_frequency_order( &data );
-    database.add( &data );
+    // let mut database = LinkedTrieDatabaseBuilder::new( 0 );
+    // database.remap_by_frequency( data.iter() );
+    // let mut database = database.build_with_edgelist();
+    // database.add( &data );
 
-    let n = 5000;
+    let n = 1000;
 
-    info!( "Start benchmark: queries without cache" );
-    database.set_max_cache_length( 0 );
-    let time = benchmark_uniform_queries( &database, n );
-    info!( "Result: {n} uniform queries took {}ms", time.as_millis() );
+    // info!( "Start benchmark: queries without cache" );
+    // database.set_max_cache_length( 0 );
+    // let time = benchmark_uniform_queries( &database, n );
+    // info!( "Result: {n} uniform queries took {}ms", time.as_millis() );
 
-    info!( "Start benchmark: queries with cache" );
+    // info!( "Start benchmark: queries with cache" );
+    // database.set_max_cache_length( 10 ); // cache all queries
+    // let time = benchmark_uniform_queries( &database, n );
+    // info!( "Result: {n} uniform queries took {}ms", time.as_millis() );
+
+    // benchmarks on skip graph
+    let mut database = LinkedTrieDatabaseBuilder::new( 0 );
+    database.remap_by_frequency( data.iter() );
+    let mut database = database.build_with_skipgraph();
+    database.add( &data[0 .. 200] );
+
+    info!( "Start benchmark: queries on skip graph" );
     database.set_max_cache_length( 10 ); // cache all queries
     let time = benchmark_uniform_queries( &database, n );
     info!( "Result: {n} uniform queries took {}ms", time.as_millis() );
+    
 
     Result::Ok( () )
 }
@@ -36,8 +50,8 @@ fn main() -> Result<(), String> {
 
 
 
-fn benchmark_uniform_queries( database: &LinkedTrieBackedDatabase, number_queries: u64 ) -> Duration {
-    let mut universe = database.create_universe();
+fn benchmark_uniform_queries <D: Database> ( database: &D, number_queries: u64 ) -> Duration {
+    let mut universe: Itemvec = database.get_item_range().collect();
     println!( "universe {universe:?}" );
     
     let m = universe.len();

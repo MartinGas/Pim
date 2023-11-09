@@ -648,7 +648,7 @@ impl Iterator for PatternRecombinator {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::data::LinkedTrieBackedDatabase;
+    use crate::data::*;
 
     // is there a better place for this?
     macro_rules! assert_approx {
@@ -991,7 +991,8 @@ mod test {
 	    ( vec!( 1, 2 ), 1),
 	    ( vec!( 0, 1, 2 ), 5 )
 	);
-	let mut database = LinkedTrieBackedDatabase::new_with_static_order( &[0, 1, 2] );
+	let database = LinkedTrieDatabaseBuilder::new( 3 );
+	let mut database = database.build_with_edgelist();
 	for (transaction, count) in &data {
 	    for i in 0 .. *count {
 		database.add( [transaction].iter().copied() );
