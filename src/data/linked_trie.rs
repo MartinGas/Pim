@@ -35,6 +35,7 @@ pub struct Trie<L: Link> {
 
 /// Trie variants for external use
 pub type EdgeListTrie = Trie<edge_list::EdgeList>;
+pub type EdgeListTrieBetter = Trie<edge_list2::EdgeList>;
 pub type SkipGraphTrie = Trie<skip_graph::SkipGraph>;
 
 /// wraps an interator to hide the internal generic parameters
@@ -118,6 +119,16 @@ impl Trie<edge_list::EdgeList> {
 	      node_builder: Box::new( node_builder ),
 	}
     }    
+}
+
+impl Trie<edge_list2::EdgeList> {
+    pub fn new_with_edgelist_better() -> Trie<edge_list2::EdgeList> {
+	let node_builder = DefaultNodeBuilder;
+	let root = node_builder.build( 0 );
+	Trie{ root,
+	      node_builder: Box::new( node_builder ),
+	}
+    }
 }
 
 impl Trie<skip_graph::SkipGraph> {
@@ -530,6 +541,12 @@ mod test {
     }
 
     #[test]
+    fn test_better_edgelist_add_and_query_subset_support() {
+	let trie = Trie::new_with_edgelist_better();
+	add_and_query_subset_support( trie );
+    }
+
+    #[test]
     fn test_skipgraph_add_and_query_subset_support() {
 	let trie = Trie::new_with_skipgraph( 6 );
 	add_and_query_subset_support( trie );
@@ -563,6 +580,12 @@ mod test {
     #[test]
     fn test_edgelist_add_and_query_prefix_support() {
 	let trie = Trie::new_with_edgelist();
+	add_and_query_prefix_support( trie );
+    }
+
+        #[test]
+    fn test_better_edgelist_add_and_query_prefix_support() {
+	let trie = Trie::new_with_edgelist_better();
 	add_and_query_prefix_support( trie );
     }
 

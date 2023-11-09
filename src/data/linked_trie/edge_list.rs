@@ -54,6 +54,57 @@ impl Link for EdgeList {
     }
 }
 
+/// Returns next position in items after last match and indicates if the path may be a superset of items
+fn is_partial_superset( items: ItemSeq, path: &ItemVec ) -> (usize, bool) {
+    let mut path_iter = path.iter();
+    let mut next_position = 0;
+
+    // check whether query items are on the path
+    for query_item in items.iter() {
+	let mut path_item = path_iter.next();
+	while path_item.map_or( false, |item| item < query_item ) {
+	    path_item = path_iter.next();
+	}
+
+	// all items on path are less than the current item
+	if path_item.is_none() {
+	    return (next_position, true);
+	}
+	let path_item = path_item.unwrap();
+	// next item on path is larger, so query item is not on path
+	if query_item < path_item {
+	    return (next_position, false);
+	}
+
+	assert!( query_item == path_item, "proceed if equal" );
+	next_position += 1;
+    }
+    (next_position, true)
+}
+
+/// returns next position in items after last match and indicates if the path is a prefix of items.
+fn is_prefix( items: ItemSeq, path: &ItemVec ) -> (usize, bool) {
+    let mut query_iter = items.iter();
+    let mut path_iter = path.iter();
+
+    let mut query_item = query_iter.next();
+    let mut path_item = path_iter.next();
+    let mut position = 0;
+    while query_item.is_some() && path_item.is_some() {
+	if query_item != path_item {
+	    return (position, false);
+	}
+
+	query_item = query_iter.next();
+	path_item = path_iter.next();
+	position += 1;
+    }
+
+    // all query items matched
+    // path is prefix if path iterator is exhausted
+    return (position, path_item.is_none())
+}
+
 impl Default for EdgeList {
     fn default() -> Self {
 	EdgeList { edges: HashMap::new() }

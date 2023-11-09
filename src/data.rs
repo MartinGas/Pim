@@ -122,6 +122,16 @@ impl LinkedTrieDatabaseBuilder {
 	}
     }
 
+    pub fn build_with_edgelist_better( self ) -> LinkedTrieBackedDatabase<linked_trie::EdgeListTrieBetter, linked_trie::EdgeListTrieBetter> {
+	LinkedTrieBackedDatabase{ 
+	    data: linked_trie::Trie::new_with_edgelist_better(), 
+	    cache: RefCell::new( linked_trie::Trie::new_with_edgelist_better() ),
+	    item_map: self.item_map,
+	    stop_item: self.stop_item,
+	    max_cache_length: self.cache_length,
+	}
+    }
+
     pub fn build_with_skipgraph( self ) -> LinkedTrieBackedDatabase<linked_trie::SkipGraphTrie, linked_trie::SkipGraphTrie> {
 	LinkedTrieBackedDatabase{ 
 	    data: linked_trie::Trie::new_with_skipgraph( self.number_items ), 

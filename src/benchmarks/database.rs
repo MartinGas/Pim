@@ -14,35 +14,48 @@ fn main() -> Result<(), String> {
 
     let data = io::read_data(  "./data/census/census.fimi", |line| io::parse_fimi_to_vec( line, " " ))?;
     let data: Vec<Itemvec> = data.collect();
-    // let frequencies = pre::calculate_item_frequency( &data );
-    // let mut database = LinkedTrieDatabaseBuilder::new( 0 );
-    // database.remap_by_frequency( data.iter() );
-    // let mut database = database.build_with_edgelist();
-    // database.add( &data );
 
-    let n = 1000;
+    let n = 100000;
 
-    // info!( "Start benchmark: queries without cache" );
-    // database.set_max_cache_length( 0 );
-    // let time = benchmark_uniform_queries( &database, n );
-    // info!( "Result: {n} uniform queries took {}ms", time.as_millis() );
-
-    // info!( "Start benchmark: queries with cache" );
-    // database.set_max_cache_length( 10 ); // cache all queries
-    // let time = benchmark_uniform_queries( &database, n );
-    // info!( "Result: {n} uniform queries took {}ms", time.as_millis() );
-
-    // benchmarks on skip graph
+    if false {
     let mut database = LinkedTrieDatabaseBuilder::new( 0 );
     database.remap_by_frequency( data.iter() );
-    let mut database = database.build_with_skipgraph();
-    database.add( &data[0 .. 200] );
+    let mut database = database.build_with_edgelist();
+    database.add( &data );
 
-    info!( "Start benchmark: queries on skip graph" );
+    info!( "Start benchmark: queries without cache" );
+    database.set_max_cache_length( 0 );
+    let time = benchmark_uniform_queries( &database, n );
+    info!( "Result: {n} uniform queries took {}ms", time.as_millis() );
+
+    info!( "Start benchmark: queries with cache" );
     database.set_max_cache_length( 10 ); // cache all queries
     let time = benchmark_uniform_queries( &database, n );
     info!( "Result: {n} uniform queries took {}ms", time.as_millis() );
+    }
+
+    // benchmarks on skip graph -- too slow, terrible idea
+    // let mut database = LinkedTrieDatabaseBuilder::new( 0 );
+    // database.remap_by_frequency( data.iter() );
+    // let mut database = database.build_with_skipgraph();
+    // database.add( &data[0 .. 200] );
+
+    let mut database = LinkedTrieDatabaseBuilder::new( 0 );
+    database.remap_by_frequency( data.iter() );
+    let mut database = database.build_with_edgelist_better();
+    database.add( &data );
+
+    info!( "Start benchmark: queries with improved edgelist" );
+    database.set_max_cache_length( 0 ); // cache all queries
+    let time = benchmark_uniform_queries( &database, n );
+    info!( "Result: {n} uniform queries took {}ms", time.as_millis() );
     
+    if false {
+    info!( "Start benchmark: queries with improved edgelist" );
+    database.set_max_cache_length( 10 ); // cache all queries
+    let time = benchmark_uniform_queries( &database, n );
+    info!( "Result: {n} uniform queries took {}ms", time.as_millis() );
+    }
 
     Result::Ok( () )
 }
