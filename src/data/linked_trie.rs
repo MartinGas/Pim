@@ -7,10 +7,15 @@ use std::hash::Hash;
 use std::collections::{self, HashMap};
 use std::default::Default;
 use std::ops::DerefMut;
+use std::time::{self, Duration};
 
 use bit_set::BitSet;
 
 use super::{Count, Item};
+
+pub static mut selection_time: Duration = time::Duration::ZERO;
+pub static mut subset_time: Duration = time::Duration::ZERO;
+
 
 pub trait TrieInterface {
     type Iterator<'a> where Self: 'a;
@@ -29,9 +34,12 @@ pub trait TrieInterface {
 
 /// Trie with natural ordering of Items
 pub struct Trie<L: Link> {
-    root: Node<L, L::Edge>,
-    node_builder: Box<dyn NodeBuilder<L, L::Edge>>,
+    root: Node<L>,
+    node_builder: Box<dyn NodeBuilder<L>>,
 }
+
+// fix edge to be usize
+type Edge = usize;
 
 /// Trie variants for external use
 pub type EdgeListTrie = Trie<edge_list::EdgeList>;
@@ -40,7 +48,7 @@ pub type SkipGraphTrie = Trie<skip_graph::SkipGraph>;
 
 /// wraps an interator to hide the internal generic parameters
 pub struct TrieIterator<'a, L: Link + 'a> where &'a L: IntoIterator {
-    iterator: NodeIterator<&'a Node<L, L::Edge>,
+    iterator: NodeIterator<&'a Node<L>,
 			   <&'a L as IntoIterator>::IntoIter,
 			   Box<dyn Consumer<ItemVec>>>,
 }
@@ -56,16 +64,16 @@ pub trait Consumer<L> {
     fn leave( &mut self );
 }
 
-trait NodeBuilder<L, E> {
-    fn build( &self, support: Count ) -> Node<L, E>;
+trait NodeBuilder<L> {
+    fn build( &self, support: Count ) -> Node<L>;
 }
 
 struct DefaultNodeBuilder;
 /// stores edges to children
-struct Node<L, E> {
+struct Node<L> {
     edges: L,
     /// invariant: node order is the same as corresponding edges in the edge matrix
-    children: HashMap<E, Node<L, E>>,
+    children: HashMap<Edge, Node<L>>,
     support: Count,
 }
 
@@ -142,17 +150,24 @@ impl Trie<skip_graph::SkipGraph> {
     }
 }
 
-impl <L: Link> TrieInterface for Trie<L> where
-    L::Edge: Eq + Hash + Clone,
-    for<'a> &'a L: IntoIterator<Item = (L::Edge, ItemVec)>,
+impl <L: Link<Edge = Edge>> TrieInterface for Trie<L> where
+    for<'a> &'a L: IntoIterator<Item = (Edge, ItemVec)>,
 {
     type Iterator<'a> = TrieIterator<'a, L> where L: 'a;
     
     /// Returns the support count of the subset query.
     fn query_subset_support( &self, query: Vec<Item> ) -> Count {
+	let start = time::Instant::now();
+
 	let mut query = query;
 	query.sort();
-	self.root.query_subset_support( &query )
+	let support = self.root.query_subset_support( &query );
+
+	unsafe {
+	    subset_time += time::Instant::now().duration_since( start );
+	}
+
+	support
     }
 
     fn query_prefix_support( &self, query: Vec<Item> ) -> Count {
@@ -173,9 +188,8 @@ impl <L: Link> TrieInterface for Trie<L> where
     
 }
 
-impl <'a, L: Link + 'a> Trie<L> where
+impl <'a, L: Link<Edge = Edge> + 'a> Trie<L> where
     for <'b> &'b L: IntoIterator<Item = (L::Edge, ItemVec)>,
-    L::Edge: Eq + Hash + Clone
 {
 
     // used for debugging
@@ -209,11 +223,11 @@ impl <'a, L: Link + 'a> Trie<L> where
 
 impl <'a, L: Link> TrieIterator<'a, L> where &'a L: IntoIterator + 'a {
     #[allow(dead_code)]
-    fn new( start: &'a Node<L, L::Edge> ) -> TrieIterator<'a, L> {
+    fn new( start: &'a Node<L> ) -> TrieIterator<'a, L> {
 	TrieIterator{ iterator: NodeIterator::new( start, None ) }
     }
 
-    fn new_with_consumer <C> ( start: &'a Node<L, L::Edge>, consumer: C ) -> TrieIterator<'a, L> where
+    fn new_with_consumer <C> ( start: &'a Node<L>, consumer: C ) -> TrieIterator<'a, L> where
 	C: Consumer<ItemVec> + 'static
     {
 	let consumer = Box::new( consumer );
@@ -221,9 +235,8 @@ impl <'a, L: Link> TrieIterator<'a, L> where &'a L: IntoIterator + 'a {
     }
 }
 
-impl <'a, L: Link + 'a> Iterator for TrieIterator<'a, L> where
+impl <'a, L: Link<Edge = Edge> + 'a> Iterator for TrieIterator<'a, L> where
     &'a L: IntoIterator<Item = (L::Edge, ItemVec)>,
-    L::Edge: Eq + Hash + Clone,
 {
     type Item = (ItemVec, Count);
 
@@ -232,26 +245,26 @@ impl <'a, L: Link + 'a> Iterator for TrieIterator<'a, L> where
     }
 }
 
-impl <L: Default, E> NodeBuilder<L, E> for DefaultNodeBuilder {
-    fn build( &self, support: Count ) -> Node<L, E> {
+impl <L: Default> NodeBuilder<L> for DefaultNodeBuilder {
+    fn build( &self, support: Count ) -> Node<L> {
 	Node::new( support, L::default() )
     }
 }
 
-impl <F, L, E> NodeBuilder<L, E> for F where F: Fn(Count) -> Node<L, E> {
-    fn build( &self, support: Count ) -> Node<L, E> {
+impl <F, L> NodeBuilder<L> for F where F: Fn(Count) -> Node<L> {
+    fn build( &self, support: Count ) -> Node<L> {
 	self( support )
     }
 }
 
-impl <L, E> Node<L, E> {
+impl <L> Node<L> {
     pub fn get_support( &self ) -> Count { self.support }
     pub fn get_edges( &self ) -> &L { &self.edges }
 }
 
-impl <L, E> Node<L, E> {
+impl <L> Node<L> {
 
-    pub fn new( support: Count, edges: L ) -> Node<L, E> {
+    pub fn new( support: Count, edges: L ) -> Node<L> {
 	Node{
 	    support,
 	    edges,
@@ -260,10 +273,10 @@ impl <L, E> Node<L, E> {
     }
 }
 
-impl <L: Link> Node<L, L::Edge> where L::Edge: Eq + Hash + Clone {
+impl <L: Link<Edge = usize>> Node<L> {
 
-    pub fn get_child( &self, edge: &L::Edge ) -> Option<&Node<L, L::Edge>> {
-	self.children.get( edge )
+    pub fn get_child( &self, edge: Edge ) -> Option<&Node<L>> {
+	self.children.get( &edge )
     }
 
     /// Visits all nodes that represent supersets of query.
@@ -274,7 +287,12 @@ impl <L: Link> Node<L, L::Edge> where L::Edge: Eq + Hash + Clone {
 	    return self.support;
 	}
 
+	let start = time::Instant::now();
+
 	let selection = self.edges.select( &query );
+
+	unsafe { selection_time += time::Instant::now().duration_since( start ); }
+	
 	let mut sum: Count = 0;
 	for (edge, remainder) in selection {
 	    assert!( self.children.contains_key( &edge ));
@@ -306,7 +324,7 @@ impl <L: Link> Node<L, L::Edge> where L::Edge: Eq + Hash + Clone {
     }
 
         /// Extends an existing branch or creates a new one
-    pub fn add( &mut self, transaction: ItemSeq, count: Count, node_builder: & dyn NodeBuilder<L, L::Edge> ) {
+    pub fn add( &mut self, transaction: ItemSeq, count: Count, node_builder: & dyn NodeBuilder<L> ) {
 	self.support += count;
 	if transaction.is_empty() {
 	    return;
@@ -336,7 +354,7 @@ impl <L: Link> Node<L, L::Edge> where L::Edge: Eq + Hash + Clone {
 
     /// Handles incomplete match where part of an edge needs to be split off while adding.
     /// Replace the current child by new_intermediate and push down the child.
-    fn split( &mut self, new_intermediate: Node<L, L::Edge>, edge: L::Edge, split_pos: usize ) {
+    fn split( &mut self, new_intermediate: Node<L>, edge: L::Edge, split_pos: usize ) {
 	// Only part of the prefix matched, so we need to introduce an new node to branch in between.
 	let excess = self.edges.split( &edge, split_pos );
 	assert!( !excess.is_empty() );
@@ -350,7 +368,7 @@ impl <L: Link> Node<L, L::Edge> where L::Edge: Eq + Hash + Clone {
 
     /// Pushes a prefix down to the child
     /// Pre: there is no edge for the given edge_label
-    fn push( &mut self, edge_label: ItemSeq, child: Node<L, L::Edge> ) {
+    fn push( &mut self, edge_label: ItemSeq, child: Node<L> ) {
 	let edge = self.edges.add( edge_label );
 	assert!( !self.children.contains_key( &edge ) ); // there is a slot for every edge
 	self.children.insert( edge, child );
@@ -377,13 +395,9 @@ impl <L: Link> Node<L, L::Edge> where L::Edge: Eq + Hash + Clone {
     }
 }
 
-impl <L: Link> Node<L, L::Edge> where L::Edge: Eq + Hash + Clone {
+impl <'a, L, C> NodeIterator<&'a Node<L>, <&'a L as IntoIterator>::IntoIter, C> where &'a L: IntoIterator {
 
-}
-
-impl <'a, L, E, C> NodeIterator<&'a Node<L, E>, <&'a L as IntoIterator>::IntoIter, C> where &'a L: IntoIterator {
-
-    pub fn new( start: &'a Node<L, E>, consumer: Option<C> ) -> NodeIterator<&'a Node<L, E>, <&'a L as IntoIterator>::IntoIter, C> {
+    pub fn new( start: &'a Node<L>, consumer: Option<C> ) -> NodeIterator<&'a Node<L>, <&'a L as IntoIterator>::IntoIter, C> {
 	let edge_iterator = start.get_edges();
 	NodeIterator {
 	    visit_stack: vec!( (start, edge_iterator.into_iter()) ),
@@ -395,11 +409,11 @@ impl <'a, L, E, C> NodeIterator<&'a Node<L, E>, <&'a L as IntoIterator>::IntoIte
 // lifetimes:
 // 'eg is borrow of edges for the purpose of iteration
 // 'a is a temporary borrow for the time of the method only
-impl <'eg, 'a, L: Link, C> NodeIterator<&'eg Node<L, L::Edge>, <&'eg L as IntoIterator>::IntoIter, C> where
+impl <'eg, 'a, L: Link, C> NodeIterator<&'eg Node<L>, <&'eg L as IntoIterator>::IntoIter, C> where
     &'eg L: IntoIterator,
     C: DerefMut<Target = dyn Consumer<ItemVec>>,
 {
-    fn enter( &mut self, child: &'eg Node<L, L::Edge>, label: ItemVec ) {
+    fn enter( &mut self, child: &'eg Node<L>, label: ItemVec ) {
 	if let Some( consumer ) = &mut self.consumer {
 	    consumer.enter( label );
 	}
@@ -416,10 +430,9 @@ impl <'eg, 'a, L: Link, C> NodeIterator<&'eg Node<L, L::Edge>, <&'eg L as IntoIt
     }
 }
 
-impl <'eg, 'a, L: Link, C> Iterator for NodeIterator<&'eg Node<L, L::Edge>, <&'eg L as IntoIterator>::IntoIter, C> where
+impl <'eg, 'a, L: Link<Edge = Edge>, C> Iterator for NodeIterator<&'eg Node<L>, <&'eg L as IntoIterator>::IntoIter, C> where
     &'eg L: IntoIterator<Item = (L::Edge, ItemVec)>,
     C: DerefMut<Target = dyn Consumer<ItemVec>>,
-    L::Edge: Eq + Hash + Clone,
 {
 
     type Item = (ItemVec, Count);
@@ -433,7 +446,7 @@ impl <'eg, 'a, L: Link, C> Iterator for NodeIterator<&'eg Node<L, L::Edge>, <&'e
 
 	// use the next down-edge if possible
 	if let Some( (edge, label) ) = edge_iterator.next() {
-	    let child = node.get_child( &edge ).expect( "every edge connects to a child" );
+	    let child = node.get_child( edge ).expect( "every edge connects to a child" );
 	    // get the info needed
 	    let count = child.get_support();
 	    // push
@@ -506,7 +519,9 @@ mod test {
 	trie
     }
 
-    fn add_and_query_subset_support <T: TrieInterface > ( mut trie: T ) {
+    fn add_and_query_subset_support <L: Link<Edge = Edge>> ( mut trie: Trie<L> ) where
+        for<'a> &'a L: IntoIterator<Item = (L::Edge, ItemVec)>,
+    {
 	// number of items: 6 (last query asks for item 5)
 	let data = vec!(
 	    vec!( 1, 2, 3 ),
@@ -518,6 +533,7 @@ mod test {
 	for transaction in data {
 	    trie.add( transaction, 1 );
 	}
+	trie.print();
 
 	let expectations = vec!(
 	    (vec!( 0 ), 3),
