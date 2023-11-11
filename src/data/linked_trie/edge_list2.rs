@@ -26,6 +26,12 @@ pub struct EdgeListIterator<'a> {
     id_iterator: <&'a Vec<usize> as IntoIterator>::IntoIter,
 }
 
+pub struct SelectionIterator<'a> {
+    query: ItemSeq<'a>,
+    edge_list: &'a EdgeList,
+    position: usize,
+}
+
 impl Link for EdgeList {
     type Edge = Edge;
     
@@ -41,15 +47,11 @@ impl Link for EdgeList {
 		    None => None,
 		}
 	    }).collect()
+    }
 
-	// self.edges.iter().enumerate()
-	//     .filter_map( |(index, label)| {
-	// 	if let Some( remainder ) = cut_off_maximal_subsequence( query, &label ) {
-	// 	    let edge = self.identifiers[ index ];
-	// 	    Some( (edge, remainder) )
-	// 	} else {
-	// 	    None}
-	//     }).collect()
+    fn light_select <'q, 'e: 'q> ( &'e self, query: ItemSeq<'q> ) -> Box<dyn Iterator<Item = (Self::Edge, ItemSeq<'q>)> + 'q> {
+	let select_iter = SelectionIterator{ query, position: 0, edge_list: self };
+	Box::new( select_iter )
     }
 
     fn walk( &self, sequence: ItemSeq ) -> Option<(Self::Edge, usize, bool)> {
@@ -170,6 +172,14 @@ impl EdgeList {
 	}
     }
 
+    pub fn get_id( &self, index: usize ) -> Edge {
+	self.identifiers[ index ]
+    }
+
+    pub fn get_size( &self ) -> usize {
+	self.edges.len()
+    }
+
     /// Binary searches for the matching edge
     /// Returns a right edge if the search succeeds.
     /// Returns the index where to insert an edge with the given head if the search fails.
@@ -215,6 +225,25 @@ impl <'a> Iterator for EdgeListIterator<'a> {
 
 	if let (Some( ident ), Some( label )) = (next_id, next_edge) {
 	    Some( (*ident, label.iter().collect()) )
+	} else {
+	    None
+	}
+    }
+}
+
+impl <'a> Iterator for SelectionIterator<'a> {
+    type Item = (Edge, ItemSeq<'a>);
+
+    fn next( &mut self ) -> Option<Self::Item> {
+	if self.position >= self.edge_list.get_size() {
+	    return None;
+	}
+
+	let index = self.position;
+	self.position += 1;
+	if let Some( remainder ) = self.edge_list.cut_off_subset( index, self.query ) {
+	    let edge_id = self.edge_list.get_id( index );
+	    Some( (edge_id, remainder) )
 	} else {
 	    None
 	}
