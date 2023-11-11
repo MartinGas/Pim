@@ -9,7 +9,7 @@ use bit_set::BitSet;
 
 use crate::*;
 
-mod linked_trie;
+pub mod linked_trie;
 
 pub type Transaction = BitSet;
 pub type Query = Vec<Item>;
@@ -126,16 +126,6 @@ impl LinkedTrieDatabaseBuilder {
 	LinkedTrieBackedDatabase{ 
 	    data: linked_trie::Trie::new_with_edgelist_better(), 
 	    cache: RefCell::new( linked_trie::Trie::new_with_edgelist_better() ),
-	    item_map: self.item_map,
-	    stop_item: self.stop_item,
-	    max_cache_length: self.cache_length,
-	}
-    }
-
-    pub fn build_with_skipgraph( self ) -> LinkedTrieBackedDatabase<linked_trie::SkipGraphTrie, linked_trie::SkipGraphTrie> {
-	LinkedTrieBackedDatabase{ 
-	    data: linked_trie::Trie::new_with_skipgraph( self.number_items ), 
-	    cache: RefCell::new( linked_trie::Trie::new_with_skipgraph( self.number_items )),
 	    item_map: self.item_map,
 	    stop_item: self.stop_item,
 	    max_cache_length: self.cache_length,
@@ -400,6 +390,7 @@ mod test {
     // 	assert_eq!( database.query_support( vec!( 1 ) ), 2 );
     // }
 }
+
 
 
 

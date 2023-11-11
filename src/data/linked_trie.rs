@@ -1,15 +1,12 @@
 
 mod edge_list;
 mod edge_list2;
-mod skip_graph;
+// it's useless, stop maintaining it and eventually remove it
+// mod skip_graph; 
 
-use std::hash::Hash;
-use std::collections::{self, HashMap};
 use std::default::Default;
 use std::ops::DerefMut;
 use std::time::{self, Duration};
-
-use bit_set::BitSet;
 
 use super::{Count, Item};
 
@@ -44,7 +41,6 @@ type Edge = usize;
 /// Trie variants for external use
 pub type EdgeListTrie = Trie<edge_list::EdgeList>;
 pub type EdgeListTrieBetter = Trie<edge_list2::EdgeList>;
-pub type SkipGraphTrie = Trie<skip_graph::SkipGraph>;
 
 /// wraps an interator to hide the internal generic parameters
 pub struct TrieIterator<'a, L: Link + 'a> where &'a L: IntoIterator {
@@ -73,7 +69,7 @@ struct DefaultNodeBuilder;
 struct Node<L> {
     edges: L,
     /// invariant: node order is the same as corresponding edges in the edge matrix
-    children: HashMap<Edge, Node<L>>,
+    children: Vec<Node<L>>,
     support: Count,
 }
 
@@ -100,6 +96,8 @@ pub trait Link {
 
     /// returns the edge that matches the subset query and the remainder of the query
     fn select <'e, 'q> ( &'e self, query: ItemSeq<'q> ) -> Vec<(Self::Edge, ItemSeq<'q>)>;
+
+    fn light_select <'q, 'e: 'q> ( &'e self, query: ItemSeq<'q> ) -> Box<dyn Iterator<Item = (Self::Edge, ItemSeq<'q>)> + 'q>;
 
     /// Determines if there is an edge that is a partial prefix of the sequence.
     /// Returns the edge, size of the prefix and whether the complete prefix matches the sequence,
@@ -139,17 +137,6 @@ impl Trie<edge_list2::EdgeList> {
     }
 }
 
-impl Trie<skip_graph::SkipGraph> {
-    pub fn new_with_skipgraph( number_of_items: usize ) -> SkipGraphTrie {
-	// simplify: every skip graph has all items as nodes
-	let node_builder = move |support| Node::new( support, skip_graph::SkipGraph::new( number_of_items ));
-	let root = node_builder.build( 0 );
-	Trie{ root,
-	      node_builder: Box::new( node_builder ),
-	}
-    }
-}
-
 impl <L: Link<Edge = Edge>> TrieInterface for Trie<L> where
     for<'a> &'a L: IntoIterator<Item = (Edge, ItemVec)>,
 {
@@ -157,15 +144,15 @@ impl <L: Link<Edge = Edge>> TrieInterface for Trie<L> where
     
     /// Returns the support count of the subset query.
     fn query_subset_support( &self, query: Vec<Item> ) -> Count {
-	let start = time::Instant::now();
+	// let start = time::Instant::now();
 
 	let mut query = query;
 	query.sort();
 	let support = self.root.query_subset_support( &query );
 
-	unsafe {
-	    subset_time += time::Instant::now().duration_since( start );
-	}
+	// unsafe {
+	    // subset_time += time::Instant::now().duration_since( start );
+	// }
 
 	support
     }
@@ -268,7 +255,7 @@ impl <L> Node<L> {
 	Node{
 	    support,
 	    edges,
-	    children: HashMap::new(),
+	    children: Vec::new(),
 	}
     }
 }
@@ -276,7 +263,7 @@ impl <L> Node<L> {
 impl <L: Link<Edge = usize>> Node<L> {
 
     pub fn get_child( &self, edge: Edge ) -> Option<&Node<L>> {
-	self.children.get( &edge )
+	self.children.get( edge )
     }
 
     /// Visits all nodes that represent supersets of query.
@@ -287,16 +274,16 @@ impl <L: Link<Edge = usize>> Node<L> {
 	    return self.support;
 	}
 
-	let start = time::Instant::now();
+	// let start = time::Instant::now();
 
-	let selection = self.edges.select( &query );
+	let selection = self.edges.light_select( &query );
 
-	unsafe { selection_time += time::Instant::now().duration_since( start ); }
+	// unsafe { selection_time += time::Instant::now().duration_since( start ); }
 	
 	let mut sum: Count = 0;
 	for (edge, remainder) in selection {
-	    assert!( self.children.contains_key( &edge ));
-	    let child = &self.children[ &edge ];
+	    assert!( edge < self.children.len() );
+	    let child = &self.children[ edge ];
 	    sum += child.query_subset_support( remainder );
 	}
 	sum
@@ -316,7 +303,7 @@ impl <L: Link<Edge = usize>> Node<L> {
 	    }
 
 	    // found an edge that is a complete prefix
-	    let child = &self.children[ &edge ];
+	    let child = &self.children[ edge ];
 	    child.query_prefix_support( &sequence[ pos ..] )
 	} else { // there is no matching edge
 	    0
@@ -331,7 +318,7 @@ impl <L: Link<Edge = usize>> Node<L> {
 	}
 
 	if let Some( (edge, add_pos, is_complete) ) = self.edges.walk( transaction ) {
-	    assert!( self.children.contains_key( &edge ) );
+	    assert!( edge < self.children.len() );
 	    // if add_pos is out of bounds we simply pass on the empty slice
 	    let remainder = transaction.get( add_pos .. ).unwrap_or( &[] );
 
@@ -339,16 +326,17 @@ impl <L: Link<Edge = usize>> Node<L> {
 	    if !is_complete {
 		let new_intermediate = node_builder.build( 0 );
 		self.split( new_intermediate, edge.clone(), add_pos );
-		self.children.get_mut( &edge ).expect( "replaced child" ).add( remainder, count, node_builder );
+		self.children.get_mut( edge ).expect( "replaced child" ).add( remainder, count, node_builder );
 	    } else {
-		let child = self.children.get_mut( &edge ).expect( "Edge leads to child" );
+		let child = self.children.get_mut( edge ).expect( "Edge leads to child" );
 		child.add( remainder, count, node_builder );
 	    }
 	} else {
 	    // we need a new edge and node
 	    let edge = self.edges.add( &transaction );
-	    assert!( !self.children.contains_key( &edge ) );
-	    self.children.insert( edge, node_builder.build( count ));
+	    // invariant: new edge indexes end
+	    assert!( self.children.len() == edge );
+	    self.children.push( node_builder.build( count ));
 	}
     }
 
@@ -359,9 +347,9 @@ impl <L: Link<Edge = usize>> Node<L> {
 	let excess = self.edges.split( &edge, split_pos );
 	assert!( !excess.is_empty() );
 	
-	// push the current child down to intermediate
-	let pushed_down_child = self.children.insert( edge.clone(), new_intermediate ).expect( "Push down existing child" );
-	let new_intermediate = self.children.get_mut( &edge ).expect( "Inserted intermediate child" );
+	// push the current child down as child of new intermediate node
+	let pushed_down_child = std::mem::replace( &mut self.children[ edge ], new_intermediate );
+	let new_intermediate = self.children.get_mut( edge ).expect( "Inserted intermediate child" );
 	new_intermediate.support = pushed_down_child.support;
 	new_intermediate.push( &excess, pushed_down_child );
     }
@@ -370,7 +358,8 @@ impl <L: Link<Edge = usize>> Node<L> {
     /// Pre: there is no edge for the given edge_label
     fn push( &mut self, edge_label: ItemSeq, child: Node<L> ) {
 	let edge = self.edges.add( edge_label );
-	assert!( !self.children.contains_key( &edge ) ); // there is a slot for every edge
+	// invariant: the edge indexes the end of self.children
+	assert!( edge == self.children.len() );
 	self.children.insert( edge, child );
     }
 
@@ -383,11 +372,11 @@ impl <L: Link<Edge = usize>> Node<L> {
 
 	let edges: &L = &self.edges;
 	for (edge, label) in edges.into_iter() {
-	    assert!( self.children.contains_key( &edge ));
+	    assert!( edge < self.children.len() );
 	    for item in &label {
 		items.push( *item );
 	    }
-	    self.children[ &edge ].print( items );
+	    self.children[ edge ].print( items );
 	    for _ in label {
 		items.pop();
 	    }
@@ -460,43 +449,6 @@ impl <'eg, 'a, L: Link<Edge = Edge>, C> Iterator for NodeIterator<&'eg Node<L>, 
     }
 }
 
-impl Link for skip_graph::SkipGraph {
-    // edges are represented by a sequence id
-    type Edge = usize;
-
-    fn select <'e, 'q> ( &'e self, query: ItemSeq<'q> ) -> Vec<(Self::Edge, ItemSeq<'q>)> {
-	let subsequence_to_visits = self.get_sequence_with_subsequence( &query );
-	let mut edge_and_remainder = Vec::with_capacity( subsequence_to_visits.len() );
-	for (edge, visits) in subsequence_to_visits {
-	    let remainder = &query[ visits .. ]; // unvisited 
-	    // let remainder = if visits < query.len() { &query[ visits + 1 ..] } else { &[] };
-	    edge_and_remainder.push( (edge, remainder) );
-	}
-	edge_and_remainder
-    }
-
-    fn walk( &self, sequence: ItemSeq ) -> Option<(Self::Edge, usize, bool)> {
-	let prefix_to_visits = self.get_sequence_with_prefix( &sequence );
-	// there is only one edge for every starting letter
-	assert!( prefix_to_visits.len() < 2 );
-	
-	for (edge, (visits, is_complete)) in prefix_to_visits {
-	    return Some( (edge, visits, is_complete) );
-	}
-	None
-    }
-
-    fn add( &mut self, label: ItemSeq ) -> Self::Edge {
-	assert!( !label.is_empty() ); // handle empty labels
-	self.add( label )
-    }
-
-    fn split( &mut self, edge: &Self::Edge, position: usize ) -> ItemVec {
-	assert!( position > 0 ); // skip graph cannot delete sequences (yet)
-	self.truncate( *edge, position - 1 )
-    }    
-}
-
 // todo move it somewhere where it's useful
 #[allow(dead_code)]
 fn format_items <'a, I> ( items: I ) -> String where I: Iterator<Item = &'a Item> {
@@ -562,12 +514,6 @@ mod test {
 	add_and_query_subset_support( trie );
     }
 
-    #[test]
-    fn test_skipgraph_add_and_query_subset_support() {
-	let trie = Trie::new_with_skipgraph( 6 );
-	add_and_query_subset_support( trie );
-    }
-
     fn add_and_query_prefix_support <T: TrieInterface> ( mut trie: T ) {
 	// number of items: 3
 	let data = vec!(
@@ -602,12 +548,6 @@ mod test {
         #[test]
     fn test_better_edgelist_add_and_query_prefix_support() {
 	let trie = Trie::new_with_edgelist_better();
-	add_and_query_prefix_support( trie );
-    }
-
-    #[test]
-    fn test_skipgraph_add_and_query_prefix_support() {
-	let trie = Trie::new_with_skipgraph( 3 );
 	add_and_query_prefix_support( trie );
     }
 }
