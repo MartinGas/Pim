@@ -7,13 +7,14 @@ mod edge_list2;
 use std::default::Default;
 use std::ops::DerefMut;
 use std::time::{self, Duration};
+use rayon::prelude::*;
 
 use super::{Count, Item};
 
 pub static mut selection_time: Duration = time::Duration::ZERO;
 pub static mut subset_time: Duration = time::Duration::ZERO;
 
-
+/// Abstracts over trie's generic parameter. It is only meant to be instantiated with private types.
 pub trait TrieInterface {
     type Iterator<'a> where Self: 'a;
 
@@ -33,6 +34,8 @@ pub trait TrieInterface {
 pub struct Trie<L: Link> {
     root: Node<L>,
     node_builder: Box<dyn NodeBuilder<L>>,
+    /// least height for parallel subset visit
+    min_height_par: usize,
 }
 
 // fix edge to be usize
@@ -71,6 +74,7 @@ struct Node<L> {
     /// invariant: node order is the same as corresponding edges in the edge matrix
     children: Vec<Node<L>>,
     support: Count,
+    height: usize,
 }
 
 struct NodeIterator<N, Eit, C> {
@@ -93,11 +97,12 @@ type ItemVec = Vec<Item>;
 /// Collection of edges labeled by ordered item sets.
 pub trait Link {
     type Edge; // representation of an edge
+    type SelectionIter<'a>: Iterator<Item = (Edge, ItemSeq<'a>)> where Self: 'a; // iterator over selected edges
 
     /// returns the edge that matches the subset query and the remainder of the query
     fn select <'e, 'q> ( &'e self, query: ItemSeq<'q> ) -> Vec<(Self::Edge, ItemSeq<'q>)>;
 
-    fn light_select <'q, 'e: 'q> ( &'e self, query: ItemSeq<'q> ) -> Box<dyn Iterator<Item = (Self::Edge, ItemSeq<'q>)> + 'q>;
+    fn light_select <'q> ( &'q self, query: ItemSeq<'q> ) -> Self::SelectionIter<'q>;
 
     /// Determines if there is an edge that is a partial prefix of the sequence.
     /// Returns the edge, size of the prefix and whether the complete prefix matches the sequence,
@@ -117,12 +122,18 @@ pub trait Link {
     fn split( &mut self, edge: &Self::Edge, position: usize ) -> ItemVec;
 }
 
+/// Extends the regular link equivalent parallel methods.
+// pub trait ParLink<I>: Link<SelectionIter = I> where I: ParallelIterator< {
+    
+// }
+
 impl Trie<edge_list::EdgeList> {
     pub fn new_with_edgelist() -> Trie<edge_list::EdgeList> {
 	let node_builder = DefaultNodeBuilder;
 	let root = node_builder.build( 0 );
 	Trie{ root,
 	      node_builder: Box::new( node_builder ),
+	      min_height_par: 5,
 	}
     }    
 }
@@ -133,6 +144,7 @@ impl Trie<edge_list2::EdgeList> {
 	let root = node_builder.build( 0 );
 	Trie{ root,
 	      node_builder: Box::new( node_builder ),
+	      min_height_par: 5,
 	}
     }
 }
@@ -148,7 +160,7 @@ impl <L: Link<Edge = Edge>> TrieInterface for Trie<L> where
 
 	let mut query = query;
 	query.sort();
-	let support = self.root.query_subset_support( &query );
+	let support = self.root.query_subset_support( &query, self.min_height_par );
 
 	// unsafe {
 	    // subset_time += time::Instant::now().duration_since( start );
@@ -256,6 +268,7 @@ impl <L> Node<L> {
 	    support,
 	    edges,
 	    children: Vec::new(),
+	    height: 0,
 	}
     }
 }
@@ -266,27 +279,21 @@ impl <L: Link<Edge = usize>> Node<L> {
 	self.children.get( edge )
     }
 
-    /// Visits all nodes that represent supersets of query.
+    /// Visits all nodes that represent supersets of query sequentially.
+    /// Parallelizes the visits if the height is at least min_height_par.
     /// Returns the sum of the supports of terminals.
-    pub fn query_subset_support( &self, query: ItemSeq ) -> Count {
+    pub fn query_subset_support( &self, query: ItemSeq, min_height_par: usize ) -> Count {
 	// solved query if all items are accounted for
 	if query.is_empty() {
 	    return self.support;
 	}
 
 	// let start = time::Instant::now();
-
-	let selection = self.edges.light_select( &query );
-
-	// unsafe { selection_time += time::Instant::now().duration_since( start ); }
-	
-	let mut sum: Count = 0;
-	for (edge, remainder) in selection {
-	    assert!( edge < self.children.len() );
-	    let child = &self.children[ edge ];
-	    sum += child.query_subset_support( remainder );
-	}
-	sum
+	self.edges.light_select( query )
+	    .map( |(edge, remainder)| {
+		assert!( edge < self.children.len() );
+		&self.children[ edge ].query_subset_support( remainder, min_height_par )
+	    }).sum()
     }
 
     /// Visits the nodes on the prefix path.
@@ -321,22 +328,26 @@ impl <L: Link<Edge = usize>> Node<L> {
 	    assert!( edge < self.children.len() );
 	    // if add_pos is out of bounds we simply pass on the empty slice
 	    let remainder = transaction.get( add_pos .. ).unwrap_or( &[] );
-
 	    // there is an edge
-	    if !is_complete {
+	    let child = if !is_complete {
 		let new_intermediate = node_builder.build( 0 );
 		self.split( new_intermediate, edge.clone(), add_pos );
-		self.children.get_mut( edge ).expect( "replaced child" ).add( remainder, count, node_builder );
+		let child = self.children.get_mut( edge ).expect( "replaced child" );
+		child.add( remainder, count, node_builder );
+		child
 	    } else {
 		let child = self.children.get_mut( edge ).expect( "Edge leads to child" );
 		child.add( remainder, count, node_builder );
-	    }
+		child
+	    };
+	    self.height = std::cmp::max( self.height, 1 + child.height );
 	} else {
 	    // we need a new edge and node
 	    let edge = self.edges.add( &transaction );
 	    // invariant: new edge indexes end
 	    assert!( self.children.len() == edge );
 	    self.children.push( node_builder.build( count ));
+	    self.height = std::cmp::max( self.height, 1 );
 	}
     }
 
@@ -383,6 +394,28 @@ impl <L: Link<Edge = usize>> Node<L> {
 	}
     }
 }
+
+// impl <'a, I, L> Node<L> where
+//     I: ParallelIterator<Item = (Edge, ItemSeq<'a>)>,
+//     L: Link<SelectionIter = I> + 'a,
+// {
+
+//     /// Parallel version of query_subset_select. 
+//     pub fn par_query_subset_support( &self, query: ItemSeq, min_height_par: usize ) -> Count {
+// 	// solved query if all items are accounted for
+// 	if query.is_empty() {
+// 	    return self.support;
+// 	}
+
+// 	// let start = time::Instant::now();
+// 	self.edges.ar_select( query )
+// 	    .map( |(edge, remainder)| {
+// 	    assert!( edge < self.children.len() );
+// 	    &self.children[ edge ].query_subset_support( remainder, min_height_par )
+// 	}).sum()
+//     }
+    
+// }
 
 impl <'a, L, C> NodeIterator<&'a Node<L>, <&'a L as IntoIterator>::IntoIter, C> where &'a L: IntoIterator {
 
@@ -463,12 +496,19 @@ fn format_items <'a, I> ( items: I ) -> String where I: Iterator<Item = &'a Item
 mod test {
     use super::*;
 
-    pub fn build_trie_from_complete_data( data: &Vec<Vec<Item>> ) -> EdgeListTrie {
+    #[test]
+    /// Test if the height is maintained correctly.
+    fn test_add_height() {
 	let mut trie = Trie::new_with_edgelist();
-	for transaction in data {
-	    trie.add( transaction.clone(), 1 );
-	}
-	trie
+
+	trie.add( vec!(0, 1, 2), 1 );
+	assert!( trie.root.height == 1 ); // root holds no data
+
+	trie.add( vec!( 1, 2, 3 ), 1 );
+	assert!( trie.root.height == 1 );
+
+	trie.add( vec!( 0, 2, 3 ), 1 ); // triggers split
+	assert!( trie.root.height == 2 );
     }
 
     fn add_and_query_subset_support <L: Link<Edge = Edge>> ( mut trie: Trie<L> ) where
@@ -545,7 +585,7 @@ mod test {
 	add_and_query_prefix_support( trie );
     }
 
-        #[test]
+    #[test]
     fn test_better_edgelist_add_and_query_prefix_support() {
 	let trie = Trie::new_with_edgelist_better();
 	add_and_query_prefix_support( trie );
