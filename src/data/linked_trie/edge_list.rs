@@ -16,8 +16,13 @@ pub struct HashMapIterAdaptor<'a> {
     counter: usize,
 }
 
+pub struct IteratorAdaptor<'a, T: 'a> {
+    iter: Box<dyn Iterator<Item = (Edge, T)> + 'a>,
+}
+
 impl Link for EdgeList {
     type Edge = usize;
+    type SelectionIter<'a> = IteratorAdaptor<'a, ItemSeq<'a>> where Self: 'a;
 
     fn select <'e, 'q> ( &'e self, query: ItemSeq<'q> ) -> Vec<(Self::Edge, ItemSeq<'q>)> {
 	self.edges.iter().enumerate()
@@ -28,14 +33,14 @@ impl Link for EdgeList {
 	    }).collect()
     }
 
-    fn light_select <'q, 'e: 'q> ( &'e self, query: ItemSeq<'q> ) -> Box<dyn Iterator<Item = (Self::Edge, ItemSeq<'q>)> + 'q> {
+    fn light_select <'q> ( &'q self, query: ItemSeq<'q> ) -> Self::SelectionIter<'q> {
 	let iter = self.edges.iter().enumerate()
 	    .filter_map( |(index, label)| {
 		let (next_pos, is_super) = is_partial_superset( query, &label );
 		let remainder = &query[ next_pos .. ];
 		if is_super { Some( (index, remainder) )} else { None }
 	    });
-	Box::new( iter )
+	IteratorAdaptor{ iter: Box::new( iter ) }
     }
 
     fn walk( &self, sequence: ItemSeq ) -> Option<(Self::Edge, usize, bool)> {
@@ -134,19 +139,18 @@ impl Default for EdgeList {
 
 impl <'a> IntoIterator for &'a EdgeList {
     type Item = (<EdgeList as Link>::Edge, ItemVec);
-    type IntoIter = HashMapIterAdaptor<'a>;
+    type IntoIter = IteratorAdaptor<'a, ItemVec>;
 
     fn into_iter(self) -> Self::IntoIter {
-	HashMapIterAdaptor{ iter: self.edges.iter(), counter: 0 }
+	let iter = self.edges.iter().cloned().enumerate();
+	IteratorAdaptor{ iter: Box::new( iter ) }
     }
 }
 
-impl <'a> Iterator for HashMapIterAdaptor<'a> {
-    type Item = (<EdgeList as Link>::Edge, ItemVec);
+impl <'a, T: 'a> Iterator for IteratorAdaptor<'a, T> {
+    type Item = (<EdgeList as Link>::Edge, T);
 
     fn next(&mut self) -> Option<Self::Item> {
-	let edge = self.counter;
-	self.counter += 1;
-	self.iter.next().map( |label| (edge, label.clone()) )
+	self.iter.next()
     }
 }

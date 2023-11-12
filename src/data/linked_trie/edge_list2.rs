@@ -34,6 +34,7 @@ pub struct SelectionIterator<'a> {
 
 impl Link for EdgeList {
     type Edge = Edge;
+    type SelectionIter<'a> = SelectionIterator<'a> where Self: 'a;
     
     fn select <'e, 'q> ( &'e self, query: ItemSeq<'q> ) -> Vec<(Self::Edge, ItemSeq<'q>)> {
 	let num_edges = self.edges.len();
@@ -49,9 +50,9 @@ impl Link for EdgeList {
 	    }).collect()
     }
 
-    fn light_select <'q, 'e: 'q> ( &'e self, query: ItemSeq<'q> ) -> Box<dyn Iterator<Item = (Self::Edge, ItemSeq<'q>)> + 'q> {
+    fn light_select <'q> ( &'q self, query: ItemSeq<'q> ) -> Self::SelectionIter<'q> {
 	let select_iter = SelectionIterator{ query, position: 0, edge_list: self };
-	Box::new( select_iter )
+	select_iter
     }
 
     fn walk( &self, sequence: ItemSeq ) -> Option<(Self::Edge, usize, bool)> {

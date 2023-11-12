@@ -292,7 +292,7 @@ impl <L: Link<Edge = usize>> Node<L> {
 	self.edges.light_select( query )
 	    .map( |(edge, remainder)| {
 		assert!( edge < self.children.len() );
-		&self.children[ edge ].query_subset_support( remainder, min_height_par )
+		self.children[ edge ].query_subset_support( remainder, min_height_par )
 	    }).sum()
     }
 
