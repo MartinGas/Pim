@@ -128,6 +128,7 @@ impl Link for EdgeList {
     }    
 }
 
+// TODO remove
 /// Calculates remainder of query obtained by removing all elements from query that are in label.
 /// Returns the remainder if all elements in query smaller than the greatest element in label are contained in label.
 /// Pre: label is non-empty
@@ -236,18 +237,15 @@ impl <'a> Iterator for SelectionIterator<'a> {
     type Item = (Edge, ItemSeq<'a>);
 
     fn next( &mut self ) -> Option<Self::Item> {
-	if self.position >= self.edge_list.get_size() {
-	    return None;
+	while self.position < self.edge_list.get_size() {
+	    let index = self.position;
+	    self.position += 1;
+	    if let Some( remainder ) = self.edge_list.cut_off_subset( index, self.query ) {
+		let edge_id = self.edge_list.get_id( index );
+		return Some( (edge_id, remainder) );
+	    }
 	}
-
-	let index = self.position;
-	self.position += 1;
-	if let Some( remainder ) = self.edge_list.cut_off_subset( index, self.query ) {
-	    let edge_id = self.edge_list.get_id( index );
-	    Some( (edge_id, remainder) )
-	} else {
-	    None
-	}
+	None
     }
 }
 
@@ -277,6 +275,13 @@ mod test {
 	assert_eq!( selection.len(), 1 );
 	assert_eq!( selection[0].0, e1 );
 	assert_eq!( selection[0].1, &[4] );
+
+	// test query that does not always match the first element per branch
+	let query = [3];
+	let selection = edges.select( &query );
+	assert_eq!( selection.len(), 2 );
+	assert_eq!( selection[ 0 ], (e2, &query[ .. ]) );
+	assert_eq!( selection[ 1 ], (e1, &query[ 1 .. ]) );
     }
 
     #[test]
