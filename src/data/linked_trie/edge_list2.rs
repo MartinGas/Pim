@@ -332,4 +332,22 @@ mod test {
 	let result = edges.walk( &[2, 3, 4] );
 	assert_eq!( result.unwrap(), (e2, 3, true) );
     }
+
+    #[test]
+    fn test_iterate() {
+	let mut edges = EdgeList::new();
+	let l1 = vec!( 0, 2, 3 );
+	let e1 = edges.add( &l1 );
+	let l2 = vec!( 2, 4, 5 );
+	let e2 = edges.add( &l2 );
+	let l3 = vec!( 1, 2, 3 );
+	let e3 = edges.add( &l3 );
+
+
+	let sequence: Vec<(Edge, ItemVec)> = edges.into_iter().collect();
+	assert_eq!( sequence.len(), 3 );
+	assert_eq!( sequence[ 0 ], (e1, l1) );
+	assert_eq!( sequence[ 1 ], (e3, l3) );
+	assert_eq!( sequence[ 2 ], (e2, l2) );	    
+    }
 }

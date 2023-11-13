@@ -56,7 +56,8 @@ pub struct TrieIterator<'a, L: Link + 'a> where &'a L: IntoIterator {
 pub type EdgeListTrieIterator<'a> = TrieIterator<'a, edge_list::EdgeList>;
 
 /// Types that consume sequences fed in chunks to them during the traversal.
-pub trait Consumer<L> {
+pub trait Consumer
+    <L> {
     /// Notifies the consumer that the traversal entered a new node via an edge with the given label
     fn enter( &mut self, label: L );
     /// Notifies the consumer that the traversal leaves the current node
@@ -589,5 +590,48 @@ mod test {
     fn test_better_edgelist_add_and_query_prefix_support() {
 	let trie = Trie::new_with_edgelist_better();
 	add_and_query_prefix_support( trie );
+    }
+
+    fn add_and_iterate <T: TrieInterface> ( mut trie: T ) {
+	// number of items: 6
+	trie.add( vec!( 1, 4, 5 ), 1);
+	trie.add( vec!( 0, 2, 3, 5 ), 1);
+	trie.add( vec!( 1, 2, 4, 5 ), 1);
+	trie.add( vec!( 0, 1, 3 ), 1);
+	trie.add( vec!( 0, 2, 3, 4 ), 1 );
+
+	/* yields trie: [[0] ([1,3], [2,3] ([4], [5])), [1] ([3], [4,5])) */
+	let mut expected = vec!(
+	    vec!( 0 ),
+	    vec!( 1, 3 ),
+	    vec!( 2, 3 ),
+	    vec!( 4 ),
+	    vec!( 5 ),
+	    vec!( 1 ),
+	    vec!( 3 ),
+	    vec!( 4, 5 ) );
+	// pop from the back
+	expected.reverse();
+	
+	struct Tester( Vec<ItemVec> );
+	impl Consumer<ItemVec> for Tester {
+	    fn enter( &mut self, label: ItemVec ) {
+		let top = self.0.pop();
+		assert!( top.is_some(), "excessinve element {:?}", label );
+		assert_eq!( top.unwrap(), label );
+	    }
+
+	    fn leave( &mut self ) {}
+	}
+	
+
+	let tester = Tester( expected );
+	trie.iterate_and_consume( tester );
+    }
+
+    #[test]
+    fn test_edgelistdd_and_iterate() {
+	let trie = Trie::new_with_edgelist();
+	add_and_iterate( trie );
     }
 }

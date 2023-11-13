@@ -137,7 +137,8 @@ impl LinkedTrieDatabaseBuilder {
 	let item_stream = data_iter.flatten();
 	let frequency_map: HashMap<Item, u64> = calc_item_frequencies( item_stream );
 	self.item_map = map_by_score( &frequency_map );
-	self.number_items = self.item_map.len() + 1;
+	self.number_items = self.item_map.len();
+	self.stop_item = self.number_items + 1;
     }
 
 }
@@ -188,10 +189,11 @@ impl <Td: TrieInterface, Tc: TrieInterface> LinkedTrieBackedDatabase<Td, Tc> {
 	    // println!( "Found cache {query:?} = {cached_support}" );
 	    return cached_support
 	}
-
+	
 	// not cached
 	query.pop();
 	let support = self.data.query_subset_support( query.clone() );
+	// println!( "{:?} not cached, determined support {:?}", query, support );
 	// Cannot store non-occurring things.
 	// Not needed anyway, because query traverses a single path.
 	if query.len() < self.max_cache_length && support > 0  {
@@ -332,63 +334,65 @@ mod test {
 
     use super::*;
     
-    // /// Compresses some sequences into a trie. Visits all sequences afterwards.
-    // #[test]
-    // fn test_iteration() {
+    /// Compresses some sequences into a trie. Visits all sequences afterwards.
+    #[test]
+    fn test_iteration() {
 
-    // 	// need data that has items in descending frequency order already
-    // 	let data = vec!(
-    // 	    vec!( 0, 1, 2, 3, 4 ),
-    // 	    vec!( 0, 1, 2, 3 ),
-    // 	    vec!( 0, 1, 2 ),
-    // 	    vec!( 0, 1 ),
-    // 	    vec!( 0, 1 ), // duplicate
-    // 	    vec!( 0 ),
-    // 	);
+	// need data that has items in descending frequency order already
+	let data = vec!(
+	    vec!( 0, 1, 2, 3, 4 ),
+	    vec!( 0, 1, 2, 3 ),
+	    vec!( 0, 1, 2 ),
+	    vec!( 0, 1 ),
+	    vec!( 0, 1 ), // duplicate
+	    vec!( 0 ),
+	);
 
-    // 	type Itemvec = Vec<Item>;
-    // 	let mut expectations: HashMap<Itemvec, Count> = HashMap::new();
-    // 	expectations.insert( vec!( 0 ), 1 );
-    // 	expectations.insert( vec!( 0, 1 ), 2 );
-    // 	expectations.insert( vec!( 0, 1, 2 ), 1 );
-    // 	expectations.insert( vec!( 0, 1, 2, 3 ), 1 );
-    // 	expectations.insert( vec!( 0, 1, 2, 3, 4 ), 1 );
+	type Itemvec = Vec<Item>;
+	let mut expectations: HashMap<Itemvec, Count> = HashMap::new();
+	expectations.insert( vec!( 0 ), 1 );
+	expectations.insert( vec!( 0, 1 ), 2 );
+	expectations.insert( vec!( 0, 1, 2 ), 1 );
+	expectations.insert( vec!( 0, 1, 2, 3 ), 1 );
+	expectations.insert( vec!( 0, 1, 2, 3, 4 ), 1 );
 
-    // 	let mut database = LinkedTrieBackedDatabase::new_with_frequency_order( &data );
-    // 	database.add( &data );
+	let mut database = LinkedTrieDatabaseBuilder::new( 5 );
+	let mut database = database.build_with_edgelist_better();
+	database.add( &data );
 
-    // 	for (real_chunk, real_count) in database.into_iter() {
-    // 	    let real_chunk_vector: Itemvec = real_chunk.iter().collect();
-    // 	    let count = expectations.remove( &real_chunk_vector );
+	for (real_chunk, real_count) in database.into_iter() {
+	    let real_chunk_vector: Itemvec = real_chunk.iter().collect();
+	    let count = expectations.remove( &real_chunk_vector );
 
-    // 	    assert!( count.is_some() );
-    // 	    assert_eq!( count.unwrap(), real_count );
-    // 	}
-    // 	assert!( expectations.is_empty() );
-    // }
+	    assert!( count.is_some() );
+	    assert_eq!( count.unwrap(), real_count );
+	}
+	assert!( expectations.is_empty() );
+    }
 
-    // #[test]
-    // fn test_cache() {
-    // 	let data = vec!(
-    // 	    vec!( 0, 1 ),
-    // 	    vec!( 1, 2 ),
-    // 	);
-    // 	let mut database = LinkedTrieBackedDatabase::new_with_static_order( &vec!( 0, 1, 2 ));
-    // 	database.add( data.iter() );
-    // 	database.set_max_cache_length( 10 ); // big enough
+    #[test]
+    fn test_cache() {
+	let data = vec!(
+	    vec!( 0, 1 ),
+	    vec!( 1, 2 ),
+	);
+	let database = LinkedTrieDatabaseBuilder::new( 3 );
+	let mut database = database.build_with_edgelist_better();
+	database.add( data.iter() );
+	database.set_max_cache_length( 10 ); // big enough
 
-    // 	assert_eq!( database.query_support( vec!( 0 ) ), 1 );
-    // 	assert_eq!( database.query_support( vec!( 0 ) ), 1 );
-    // 	// does not invent data points
-    // 	assert_eq!( database.query_support( vec!( 0, 2 )), 0 );
-    // 	assert_eq!( database.query_support( vec!( 0, 2 )), 0 );
-    // 	// longer queries work too
-    // 	assert_eq!( database.query_support( vec!( 1, 2 ) ), 1 );
-    // 	assert_eq!( database.query_support( vec!( 1, 2 ) ), 1 );
-    // 	// multiple occurrences work
-    // 	assert_eq!( database.query_support( vec!( 1 ) ), 2 );
-    // 	assert_eq!( database.query_support( vec!( 1 ) ), 2 );
-    // }
+	assert_eq!( database.query_support( vec!( 0 ) ), 1 );
+	assert_eq!( database.query_support( vec!( 0 ) ), 1 );
+	// does not invent data points
+	assert_eq!( database.query_support( vec!( 0, 2 )), 0 );
+	assert_eq!( database.query_support( vec!( 0, 2 )), 0 );
+	// longer queries work too
+	assert_eq!( database.query_support( vec!( 1, 2 ) ), 1 );
+	assert_eq!( database.query_support( vec!( 1, 2 ) ), 1 );
+	// multiple occurrences work
+	assert_eq!( database.query_support( vec!( 1 ) ), 2 );
+	assert_eq!( database.query_support( vec!( 1 ) ), 2 );
+    }
 }
 
 
