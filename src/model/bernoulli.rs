@@ -896,6 +896,8 @@ mod test {
     fn test_pattern_fit() {
 	let universe = vec!( 0, 1, 2 );
 	let mut model = BernoulliAssignment::new( &universe );
+	model.parameters.set_additive_bias( 0, 0 );
+	model.parameters.set_destructive_bias( 0, 0 );
 	let pattern1 = model.create_pattern( [0, 2].iter().map( |itm| *itm ));
 	let pattern2 = model.create_pattern( [0, 1].iter().map( |itm| *itm ));
 
@@ -921,6 +923,8 @@ mod test {
 	}
 
 	model.fit( &cover );
+	println!( "cover {cover:?}" );
+	println!( "parameters {:?}", model.parameters );
 	// item 0
 	assert_approx!( model.parameters.get_additive_noise( 0 ), 1.0 / 1.0, 0.01 );
 	assert_approx!( model.parameters.get_destructive_noise( 0 ), 0.0 / 3.0, 0.01 );
