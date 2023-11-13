@@ -6,6 +6,7 @@ use std::ops::Range;
 use std::cell::RefCell;
 use std::rc::Rc;
 use bit_set::BitSet;
+use std::sync::Mutex;
 
 use crate::*;
 
@@ -38,7 +39,7 @@ pub type DataPair = (Transaction, Count);
 pub struct LinkedTrieBackedDatabase<Td, Tc> {
     data: Td,
     /// Caches past queries. RefCell'd for internal mutability.
-    cache: RefCell<Tc>,
+    cache: Mutex<Tc>,
     /// maps original items to reordered items
     item_map: HashMap<Item, Item>,
     /// special bogus item that is appended to every transaction to mark its end
@@ -115,7 +116,7 @@ impl LinkedTrieDatabaseBuilder {
     pub fn build_with_edgelist( self ) -> LinkedTrieBackedDatabase<linked_trie::EdgeListTrie, linked_trie::EdgeListTrie> {
 	LinkedTrieBackedDatabase{
 	    data: linked_trie::Trie::new_with_edgelist(),
-	    cache: RefCell::new( linked_trie::Trie::new_with_edgelist() ),
+	    cache: Mutex::new( linked_trie::Trie::new_with_edgelist() ),
 	    item_map: self.item_map, 
 	    stop_item: self.stop_item, 
 	    max_cache_length: self.cache_length
@@ -125,7 +126,7 @@ impl LinkedTrieDatabaseBuilder {
     pub fn build_with_edgelist_better( self ) -> LinkedTrieBackedDatabase<linked_trie::EdgeListTrieBetter, linked_trie::EdgeListTrieBetter> {
 	LinkedTrieBackedDatabase{ 
 	    data: linked_trie::Trie::new_with_edgelist_better(), 
-	    cache: RefCell::new( linked_trie::Trie::new_with_edgelist_better() ),
+	    cache: Mutex::new( linked_trie::Trie::new_with_edgelist_better() ),
 	    item_map: self.item_map,
 	    stop_item: self.stop_item,
 	    max_cache_length: self.cache_length,
@@ -181,7 +182,12 @@ impl <Td: TrieInterface, Tc: TrieInterface> LinkedTrieBackedDatabase<Td, Tc> {
     /// Query subset frequency while accessing and updating cache.
     pub fn query_cached( &self, mut query: Query ) -> Count {
 	query.push( self.stop_item );
-	let cached_support = self.cache.borrow().query_prefix_support( query.clone() );
+
+	let mut cached_support = 0;
+	{
+	    let cache = self.cache.lock();
+	    cached_support = cache.expect( "locking successfully" ).query_prefix_support( query.clone() );
+	}
 	
 	// 0 occurrence means not cached or not occurring.
 	// We cannot distinguish between the two.
@@ -200,7 +206,10 @@ impl <Td: TrieInterface, Tc: TrieInterface> LinkedTrieBackedDatabase<Td, Tc> {
 	    // add to cache with stopper
 	    query.push( self.stop_item );
 	    // println!( "caching {query:?} = {support}" );
-	    self.cache.borrow_mut().add( query, support );
+	    {
+		let mut cache = self.cache.lock().expect( "locking successfully" );
+		cache.add( query, support );
+	    }
 	}
 	support
     }

@@ -4,6 +4,7 @@ mod serialize; // serialization and pretty printing of the model
 use std::collections::{HashSet, HashMap};
 use bit_set::BitSet;
 use statrs::distribution::{Beta, Continuous};
+use rayon::prelude::*;
 
 use crate::DataPair;
 
@@ -93,6 +94,8 @@ impl Model for BernoulliAssignment {
     }
 
     fn fit( &mut self, cover: &Self::Cover ) {
+	debug!( "Parameters before fit {:?}", self.parameters.pattern_prob );
+
 	// old parameters are invalid
 	self.parameters.clear();
 	
@@ -111,6 +114,8 @@ impl Model for BernoulliAssignment {
 	    let usage = cover.get_pattern_count( *token );
 	    self.parameters.fit_pattern_prob_map( *token, usage, n - usage );
 	}
+
+	debug!( "Parameter after fit {:?}", self.parameters.pattern_prob );
     }
 
     fn calc_loglik( &self, cover: &UseCount ) -> f64 {
@@ -124,7 +129,7 @@ impl Model for BernoulliAssignment {
 	loglik
     }
 
-    fn generate_candidates <D: Database> ( &self, data: &D ) -> Box<dyn Iterator<Item = Self::Candidate>> {
+    fn generate_candidates <D: Database + Sync> ( &self, data: &D ) -> Box<dyn Iterator<Item = Self::Candidate>> {
 	let blocked: HashSet<InternalPattern> = self.patterns.values().cloned().collect();
 	let mut recombinator = PatternRecombinator::new( blocked, &self.parameters );
 	// todo: can we avoid the copy?
@@ -138,6 +143,7 @@ impl Model for BernoulliAssignment {
     }
 
     fn add_candidate( &mut self, candidate: &mut Self::Candidate ) {
+	debug!( "Adding candidate {:?} (gain {:?})", candidate.pattern, candidate.gain_estimate );
 	let token = self.create_pattern( candidate.pattern.iter().copied() );
 	self.parameters.set_pattern_prob( token, candidate.probability_estimate );
 	candidate.realization = Some( token );
@@ -163,7 +169,6 @@ impl BernoulliAssignment {
 	initial.set_destructive_bias( 1, 2 );
 	// patterns are unbiased so we can get rid of them
 	// initial.set_pattern_bias( 1, 1 );
-	println!( "{initial:?}" );
 
 	BernoulliAssignment{
 	    // add_item_noise: HashMap::new(),
@@ -256,10 +261,9 @@ impl BernoulliAssignment {
 	let mut cover = Transaction::new();
 	let mut covering: Vec<PatternPair> = Vec::new();
 	while !cover_candidates.is_empty() {
-	    // for (token, _gain) in &gain_per_pattern {
-		// let pat = self.patterns.get( token ).unwrap();
-		// println!( "{pat:?} gains {gain:.3}" );
-	    // }
+	    for (token, gain) in &gain_per_pattern {
+		let pat = self.patterns.get( token ).unwrap();
+	    }
 
 	    // find the best candidate
 	    let best_entry = gain_per_pattern.iter().max_by( |left_entry, right_entry| left_entry.1.partial_cmp( right_entry.1 ).expect( "not nan" ) )
@@ -305,6 +309,8 @@ impl BernoulliAssignment {
     fn calc_empty_cover_gain( &self, transaction: &Transaction, token: Token ) -> f64 {
 	let pattern = self.patterns.get( &token ).expect( "valid token refers to a pattern" );
 	// we consider the cost given fixed parameters, so the prior does not matter
+	// println!( "Calc empty cover gain parameters {:?}", self.parameters.pattern_prob );
+
 	let pattern_cost = self.parameters.calc_pattern_loglik( token, 1, 0 );
 	let kill_cost: f64 = pattern.iter()
 	    .filter( |item| !transaction.contains( **item ))
@@ -312,8 +318,6 @@ impl BernoulliAssignment {
 	let add_savings: f64 = pattern.iter()
 	    .filter( |item| transaction.contains( **item ))
 	    .map( |item| self.parameters.calc_additive_loglik( *item, 1, 0 )).sum();
-
-	// println!( "Initial gain {pattern:?} = {pattern_cost:.3} + {kill_cost:.3} - {add_savings:.3}" );
 
 	// question: how do we deal with "infinite" gains? Are they even infinite?
 	// Occurs if event with probability 0 happens e.g. item with noise prob 0 occurs
@@ -574,14 +578,23 @@ impl PatternRecombinator {
 	}
     }
 
-    fn combine_patterns<D: Database> ( &mut self, patterns: &Vec<InternalPattern>, database: &D ) {
+    fn combine_patterns<D: Database + Sync> ( &mut self, patterns: &Vec<InternalPattern>, database: &D ) {
 	let num_patterns = patterns.len();
 
-	for i in 0 .. num_patterns {
-	    let left = &patterns[ i ];
-	    for j in i+1 .. num_patterns {
-		let right = &patterns[ j ];
+	let combinations = patterns.par_iter().enumerate()
+	    .flat_map( | (i, left) | {
+		patterns[i + 1 ..].par_iter()
+		    .map( move | right | (left, right) )
+	    });
 
+	// let combinations = patterns.iter().enumerate()
+	//     .flat_map( | (i, left) | {
+	// 	patterns[i + 1 ..].iter()
+	// 	    .map( move | right | (left, right) )
+	//     });
+
+	let mut new_candidates: Vec<CandidatePattern> = combinations
+	    .filter_map( | (left, right) | {
 		// todo: combine patterns more efficiently
 		let mut pattern = left.clone();
 		for item in right {
@@ -591,19 +604,48 @@ impl PatternRecombinator {
 		pattern.dedup();
 
 		// skip blocked patterns
-		if self.blocked.contains( &pattern ) {
-		    continue;
+		if !self.blocked.contains( &pattern ) {
+		    let (probability, gain) = self.estimate_gain_over_empty_model( &pattern, database );
+		    // println!( "Combine {left:?} + {right:?} = {pattern:?} (gain {gain:.3})" );
+		    if gain > 0.0 {
+			let candidate = CandidatePattern::new( pattern.clone(), probability, gain );
+			// self.candidate_queue.push( candidate );
+			// self.blocked.insert( pattern );
+			return Some( candidate );
+		    }
 		}
+		None
+	    }).collect();
+	    
+	let range = 0 .. new_candidates.len();
+	self.candidate_queue.extend( new_candidates.drain( range ));
+	// for i in 0 .. num_patterns {
+	//     let left = &patterns[ i ];
+	//     for j in i+1 .. num_patterns {
+	// 	let right = &patterns[ j ];
 
-		let (probability, gain) = self.estimate_gain_over_empty_model( &pattern, database );
-		// println!( "Combine {left:?} + {right:?} = {pattern:?} (gain {gain:.3})" );
-		if gain > 0.0 {
-		    let candidate = CandidatePattern::new( pattern.clone(), probability, gain );
-		    self.candidate_queue.push( candidate );
-		    self.blocked.insert( pattern );
-		}
-	    }
-	}
+	// 	// todo: combine patterns more efficiently
+	// 	let mut pattern = left.clone();
+	// 	for item in right {
+	// 	    pattern.push( *item );
+	// 	}
+	// 	pattern.sort();
+	// 	pattern.dedup();
+
+	// 	// skip blocked patterns
+	// 	if self.blocked.contains( &pattern ) {
+	// 	    continue;
+	// 	}
+
+	// 	let (probability, gain) = self.estimate_gain_over_empty_model( &pattern, database );
+	// 	// println!( "Combine {left:?} + {right:?} = {pattern:?} (gain {gain:.3})" );
+	// 	if gain > 0.0 {
+	// 	    let candidate = CandidatePattern::new( pattern.clone(), probability, gain );
+	// 	    self.candidate_queue.push( candidate );
+	// 	    self.blocked.insert( pattern );
+	// 	}
+	//     }
+	// };
     }
 
     // todo: consider candidates where items are removed
@@ -616,15 +658,14 @@ impl PatternRecombinator {
     }
 
     /// Estimates the pattern probability and gain of adding pattern to the empty model.
-    fn estimate_gain_over_empty_model <D: Database> ( &mut self, pattern: &InternalPattern, database: &D ) -> (f64, f64) {
+    fn estimate_gain_over_empty_model <D: Database> ( &self, pattern: &InternalPattern, database: &D ) -> (f64, f64) {
 	let n = database.query_support( vec!() );
 	let pattern_support = database.query_support( pattern.clone() );
-	let dummy_token = Token::MAX;
-	self.parameters.fit_pattern_prob_map( dummy_token, pattern_support, n - pattern_support );
-	let pattern_prob = self.parameters.get_pattern_prob( dummy_token );
-	let pattern_loglik = self.parameters.calc_pattern_loglik( dummy_token, pattern_support, n - pattern_support );
-	let pattern_logprior = self.parameters.calc_pattern_logprior( dummy_token );
-	self.parameters.forget( dummy_token );
+	
+	// todo: consider prior
+	let pattern_prob = calc_prob( pattern_support, n - pattern_support );
+	let pattern_loglik = calc_loglik( pattern_prob, pattern_support, n - pattern_support );
+	let pattern_logprior = 0.0;
 
 	let calc_add_noise_diff = |item: &Item| {
 	    let support = database.query_support( vec!( *item ));

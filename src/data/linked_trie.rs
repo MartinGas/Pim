@@ -33,7 +33,7 @@ pub trait TrieInterface {
 /// Trie with natural ordering of Items
 pub struct Trie<L: Link> {
     root: Node<L>,
-    node_builder: Box<dyn NodeBuilder<L>>,
+    node_builder: Box<dyn NodeBuilder<L> + Sync + Send>,
     /// least height for parallel subset visit
     min_height_par: usize,
 }

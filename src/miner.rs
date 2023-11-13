@@ -16,7 +16,8 @@ pub struct EmMiner<D, M> {
     model_formatter: Option<Box<dyn PrettyFormatter<M>>>,
 }
 
-impl <'a, D: Database, M: Model> Miner<'a, D, M> for EmMiner<D,M> where
+impl <'a, D, M: Model> Miner<'a, D, M> for EmMiner<D,M> where
+    D: Database + Sync,
     &'a D: IntoIterator<Item = DataPair> + 'a,
 {
     fn mine( &'a mut self, data: &'a D, model: &'a mut M ) where {
@@ -40,7 +41,8 @@ impl <'a, D: Database, M: Model> Miner<'a, D, M> for EmMiner<D,M> where
     }
 }
 
-impl <'a, D: Database, M: Model> EmMiner<D, M> where
+impl <'a, D, M: Model> EmMiner<D, M> where
+    D: Database + Sync,
     &'a D: IntoIterator<Item = DataPair> + 'a,
 {
     pub fn new( max_iterations: u64 ) -> EmMiner<D, M> {
@@ -99,13 +101,15 @@ impl <'a, D: Database, M: Model> EmMiner<D, M> where
     }
 
     fn grow( &self, model: &mut M, data: &'a D, loglik: f64 ) -> bool {
+	info!( "Generating candidates" );
 	let candidates = model.generate_candidates( data );
+
 	for mut current in candidates {
 	    // current.log( "adding candidate", Level::DEBUG );
 	    
 	    model.add_candidate( &mut current );
 	    let next_loglik = self.step( model, data );
-
+	    
 	    debug!( "Candidate yields {:.3} over {:.3}", next_loglik, loglik );
 
 	    if next_loglik > loglik {

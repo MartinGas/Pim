@@ -21,7 +21,7 @@ pub trait Model {
     fn calc_loglik( &self, cover: &Self::Cover ) -> f64;
 
     /// Generates candidates to better explain the provided data base.
-    fn generate_candidates <D: Database> ( &self, data: &D ) -> Box<dyn Iterator<Item = Self::Candidate>>;
+    fn generate_candidates <D: Database + Sync> ( &self, data: &D ) -> Box<dyn Iterator<Item = Self::Candidate>>;
 
     /// Adds a candidate to the model
     fn add_candidate( &mut self, candidate: &mut Self::Candidate );
