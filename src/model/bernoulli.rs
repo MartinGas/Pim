@@ -311,7 +311,7 @@ impl BernoulliAssignment {
 	// we consider the cost given fixed parameters, so the prior does not matter
 	// println!( "Calc empty cover gain parameters {:?}", self.parameters.pattern_prob );
 
-	let pattern_cost = self.parameters.calc_pattern_loglik( token, 1, 0 );
+	let pattern_cost = self.parameters.calc_pattern_loglik( token, 1, 0 ) - self.parameters.calc_pattern_loglik( token, 0, 1 );
 	let kill_cost: f64 = pattern.iter()
 	    .filter( |item| !transaction.contains( **item ))
 	    .map( |item| self.parameters.calc_destructive_loglik( *item, 1, 0 )).sum();
