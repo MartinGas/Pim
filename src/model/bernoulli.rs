@@ -587,12 +587,6 @@ impl PatternRecombinator {
 		    .map( move | right | (left, right) )
 	    });
 
-	// let combinations = patterns.iter().enumerate()
-	//     .flat_map( | (i, left) | {
-	// 	patterns[i + 1 ..].iter()
-	// 	    .map( move | right | (left, right) )
-	//     });
-
 	let mut new_candidates: Vec<CandidatePattern> = combinations
 	    .filter_map( | (left, right) | {
 		// todo: combine patterns more efficiently
@@ -619,33 +613,6 @@ impl PatternRecombinator {
 	    
 	let range = 0 .. new_candidates.len();
 	self.candidate_queue.extend( new_candidates.drain( range ));
-	// for i in 0 .. num_patterns {
-	//     let left = &patterns[ i ];
-	//     for j in i+1 .. num_patterns {
-	// 	let right = &patterns[ j ];
-
-	// 	// todo: combine patterns more efficiently
-	// 	let mut pattern = left.clone();
-	// 	for item in right {
-	// 	    pattern.push( *item );
-	// 	}
-	// 	pattern.sort();
-	// 	pattern.dedup();
-
-	// 	// skip blocked patterns
-	// 	if self.blocked.contains( &pattern ) {
-	// 	    continue;
-	// 	}
-
-	// 	let (probability, gain) = self.estimate_gain_over_empty_model( &pattern, database );
-	// 	// println!( "Combine {left:?} + {right:?} = {pattern:?} (gain {gain:.3})" );
-	// 	if gain > 0.0 {
-	// 	    let candidate = CandidatePattern::new( pattern.clone(), probability, gain );
-	// 	    self.candidate_queue.push( candidate );
-	// 	    self.blocked.insert( pattern );
-	// 	}
-	//     }
-	// };
     }
 
     // todo: consider candidates where items are removed
@@ -674,6 +641,9 @@ impl PatternRecombinator {
 	    new_loglik - old_loglik
 	};
 	let item_diff_sum: f64 = pattern.iter().map( calc_add_noise_diff ).sum();
+
+	trace!( "{pattern:?} : {pattern_prob:.3} est. gain {pattern_loglik:.3} + {pattern_logprior:.3} + {item_diff_sum:.3}" );
+	
 	(pattern_prob, pattern_loglik + pattern_logprior + item_diff_sum)
     }
 }

@@ -19,7 +19,7 @@ struct Arguments {
 fn setup_logging( args: &Arguments ) -> Result<(), String> {
     let tracer = tracing_subscriber::fmt::fmt();
     let tracer = if args.debug {
-	tracer.with_max_level( tracing_subscriber::filter::LevelFilter::DEBUG )
+	tracer.with_max_level( tracing_subscriber::filter::LevelFilter::TRACE )
     } else {
 	tracer.with_max_level( tracing_subscriber::filter::LevelFilter::INFO )
     };
@@ -46,6 +46,7 @@ fn initialize_miner( _args: &Arguments ) -> miner::EmMiner<data::DefaultDb, mode
     let mut miner = miner::EmMiner::new( 1000 );
     let mut formatter = model::BernoulliFormatter::new();
     formatter.show_patterns();
+    formatter.show_items();
     miner.provide_model_formatter( formatter );
     miner
 }

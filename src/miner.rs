@@ -24,6 +24,11 @@ impl <'a, D, M: Model> Miner<'a, D, M> for EmMiner<D,M> where
 	let mut last_loglik = f64::NEG_INFINITY;
 	let mut loglik = self.initialize( model, data );
 	let mut iteration = 0;
+
+	if let Some( formatter ) = &self.model_formatter {
+	    debug!( "{}", formatter.format_pretty( &model ));
+	}
+
 	while last_loglik < loglik {
 	    iteration += 1;
 	    let iteration_start_time = Instant::now();
@@ -111,6 +116,9 @@ impl <'a, D, M: Model> EmMiner<D, M> where
 	    let next_loglik = self.step( model, data );
 	    
 	    debug!( "Candidate yields {:.3} over {:.3}", next_loglik, loglik );
+
+	    let model_string = self.model_formatter.as_deref().unwrap().format_pretty( model );
+	    debug!( "{}", model_string);
 
 	    if next_loglik > loglik {
 		return true;
