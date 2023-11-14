@@ -1,4 +1,6 @@
 
+use serde;
+
 use crate::*;
 use crate::io::{PrettyFormatter, produce_fimi};
 
@@ -38,6 +40,12 @@ impl PrettyFormatter<BernoulliAssignment> for BernoulliFormatter {
 		}).fold( output, |acc, pattern_string| join_lines( acc, pattern_string ));
 	}
 	output
+    }
+}
+
+impl serde::Serialize for BernoulliAssignment {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: serde::Serializer {
+	self.patterns.serialize( serializer )
     }
 }
 

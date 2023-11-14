@@ -1,6 +1,8 @@
 use std::path::Path;
 use std::fs::File;
-use std::io::{BufReader, BufRead};
+use std::io::{BufReader, BufRead, Write};
+
+use serde_json as json;
 
 use bit_set::BitSet;
 
@@ -63,4 +65,16 @@ pub fn produce_fimi<I: Iterator<Item = Item>>( items: I, left_delimiter: &str, s
     fimi = items.fold( fimi, add_item_to_string );
     fimi.push_str( right_delimiter );
     fimi
+}
+
+/// Writes a serializeable model to a file
+pub fn write_model<M: serde::Serialize>( model: &M, path: &str ) -> Result<(), String> {
+    match serde_json::to_string( model ) {
+	json::Result::Ok( model_string ) => {
+	    let path = Path::new( path );
+	    let mut file = File::create( path ).map_err( |err| err.to_string() )?;
+	    write!( file, "{}", model_string ).map_err( |err| err.to_string() )
+	},
+	json::Result::Err( err ) => return Result::Err( err.to_string() ),
+    }
 }

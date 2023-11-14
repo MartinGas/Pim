@@ -4,7 +4,7 @@ use clap::{self, Parser};
 
 use transmine::*;
 // use data::*;
-use io::{read_data, parse_fimi_to_vec};
+use io::{read_data, parse_fimi_to_vec, write_model};
 
 #[derive(Parser)]
 struct Arguments {
@@ -13,8 +13,14 @@ struct Arguments {
     data_path: String,
     /// Run with debug logging
     #[arg( long, default_value_t = false )]
-    debug: bool, 
+    debug: bool,
+    /// optional path to write the model to
+    #[arg()]
+    out_path: Option<String>,
 }
+
+type UseModel = model::BernoulliAssignment;
+type UseDb = data::DefaultDb;
 
 fn setup_logging( args: &Arguments ) -> Result<(), String> {
     let tracer = tracing_subscriber::fmt::fmt();
@@ -27,7 +33,7 @@ fn setup_logging( args: &Arguments ) -> Result<(), String> {
     tracing::subscriber::set_global_default( tracer ).map_err( |err| err.to_string() )
 }
 
-fn populate_database( _args: &Arguments, data: Vec<Itemvec> ) -> data::DefaultDb {
+fn populate_database( _args: &Arguments, data: Vec<Itemvec> ) -> UseDb {
     let mut database = data::LinkedTrieDatabaseBuilder::new( 0 );
     database.remap_by_frequency( data.iter() );
     // let mut database = database.build_with_edgelist();
@@ -37,18 +43,26 @@ fn populate_database( _args: &Arguments, data: Vec<Itemvec> ) -> data::DefaultDb
     database
 }
 
-fn initialize_model( _args: &Arguments, database: &data::DefaultDb  ) -> model::BernoulliAssignment {
+fn initialize_model( _args: &Arguments, database: &data::DefaultDb  ) -> UseModel {
     let universe: Vec<Item> = database.create_universe();
     model::BernoulliAssignment::new( universe.iter() )
 }
 
-fn initialize_miner( _args: &Arguments ) -> miner::EmMiner<data::DefaultDb, model::BernoulliAssignment> {
+fn initialize_miner( _args: &Arguments ) -> miner::EmMiner<UseDb, UseModel> {
     let mut miner = miner::EmMiner::new( 1000 );
     let mut formatter = model::BernoulliFormatter::new();
     formatter.show_patterns();
     formatter.show_items();
     miner.provide_model_formatter( formatter );
     miner
+}
+
+fn finalize_results( args: &Arguments, model: &UseModel ) -> Result<(), String> {
+    if let Some( path ) = &args.out_path {
+	write_model( model, path.as_str() )
+    } else {
+	Result::Ok( () )
+    }
 }
 
 
@@ -60,6 +74,5 @@ fn main() -> Result<(), String>{
     let mut model = initialize_model( &args, &database );
     let mut miner = initialize_miner( &args );
     miner.mine( &database, &mut model );
-
-    Ok( () )
+    finalize_results( &args, &model )
 }
