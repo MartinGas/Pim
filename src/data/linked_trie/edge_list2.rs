@@ -2,7 +2,6 @@
 use std::cmp::Ordering;
 
 use bit_set::BitSet;
-use bit_vec::BitVec;
 
 use super::*;
 
@@ -126,24 +125,6 @@ impl Link for EdgeList {
 	}
 	drop_items
     }    
-}
-
-// TODO remove
-/// Calculates remainder of query obtained by removing all elements from query that are in label.
-/// Returns the remainder if all elements in query smaller than the greatest element in label are contained in label.
-/// Pre: label is non-empty
-fn cut_off_maximal_subsequence<'q> ( query: ItemSeq<'q>, label: &BitSet ) -> Option<ItemSeq<'q>> {
-    // This takes most of the time! There does not seem to be a method to get the greatest element from a bitset/bitvec
-    let label_max = label.iter().max().expect( "label is not empty" );
-    let mut pos = 0;
-    for query_item in query.iter().take_while( |item| **item <= label_max ) {
-	if !label.contains( *query_item ) {
-	    return None;
-	}
-	pos += 1;
-    }
-    
-    return Some( &query[pos ..] )
 }
 
 impl Default for EdgeList {

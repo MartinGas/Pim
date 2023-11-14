@@ -9,6 +9,7 @@ pub trait Miner<'a, D, M> {
     fn mine( &'a mut self, data: &'a D, model: &'a mut M );
 }
 
+#[allow(dead_code)]
 pub struct EmMiner<D, M> {
     max_iterations: u64,
     data: Option<D>,

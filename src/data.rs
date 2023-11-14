@@ -186,7 +186,7 @@ impl <Td: TrieInterface, Tc: TrieInterface> LinkedTrieBackedDatabase<Td, Tc> {
     pub fn query_cached( &self, mut query: Query ) -> Count {
 	query.push( self.stop_item );
 
-	let mut cached_support = 0;
+	let cached_support;
 	{
 	    let cache = self.cache.lock();
 	    cached_support = cache.expect( "locking successfully" ).query_prefix_support( query.clone() );

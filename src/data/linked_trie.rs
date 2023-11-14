@@ -7,12 +7,11 @@ mod edge_list2;
 use std::default::Default;
 use std::ops::DerefMut;
 use std::time::{self, Duration};
-use rayon::prelude::*;
 
 use super::{Count, Item};
 
-pub static mut selection_time: Duration = time::Duration::ZERO;
-pub static mut subset_time: Duration = time::Duration::ZERO;
+pub static mut _SELECTION_TIME: Duration = time::Duration::ZERO;
+pub static mut _SUBSET_TIME: Duration = time::Duration::ZERO;
 
 /// Abstracts over trie's generic parameter. It is only meant to be instantiated with private types.
 pub trait TrieInterface {

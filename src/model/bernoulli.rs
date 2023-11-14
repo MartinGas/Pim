@@ -261,10 +261,6 @@ impl BernoulliAssignment {
 	let mut cover = Transaction::new();
 	let mut covering: Vec<PatternPair> = Vec::new();
 	while !cover_candidates.is_empty() {
-	    for (token, gain) in &gain_per_pattern {
-		let pat = self.patterns.get( token ).unwrap();
-	    }
-
 	    // find the best candidate
 	    let best_entry = gain_per_pattern.iter().max_by( |left_entry, right_entry| left_entry.1.partial_cmp( right_entry.1 ).expect( "not nan" ) )
 		.expect( "there are candidates" );
@@ -579,8 +575,6 @@ impl PatternRecombinator {
     }
 
     fn combine_patterns<D: Database + Sync> ( &mut self, patterns: &Vec<InternalPattern>, database: &D ) {
-	let num_patterns = patterns.len();
-
 	let combinations = patterns.par_iter().enumerate()
 	    .flat_map( | (i, left) | {
 		patterns[i + 1 ..].par_iter()

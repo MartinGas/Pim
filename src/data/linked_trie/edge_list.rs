@@ -11,6 +11,7 @@ pub struct EdgeList {
     head_to_index: FxHashMap<Item, usize>,
 }
 
+#[allow(dead_code)]
 pub struct HashMapIterAdaptor<'a> {
     iter: <&'a Vec<ItemVec> as IntoIterator>::IntoIter,
     counter: usize,

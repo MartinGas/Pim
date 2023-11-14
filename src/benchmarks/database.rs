@@ -30,8 +30,8 @@ fn benchmark_edgelist( data: &Vec<Itemvec>, num_queries: u64, bench_nocache: boo
     let mut database = database.build_with_edgelist();
     database.add( data );
 
-    let mut selection_time: u128 = 0;
-    let mut subset_time: u128 = 0;
+    let selection_time: u128;
+    let subset_time: u128;
     
     if bench_nocache {
 	info!( "Start benchmark: queries without cache" );
@@ -39,8 +39,8 @@ fn benchmark_edgelist( data: &Vec<Itemvec>, num_queries: u64, bench_nocache: boo
 	let time = benchmark_uniform_queries( &database, num_queries );
 	info!( "Result: {num_queries} uniform queries took {}ms", time.as_millis() );
 	unsafe {
-	    selection_time = trie::selection_time.as_millis();
-	    subset_time = trie::subset_time.as_millis();
+	    selection_time = trie::_SELECTION_TIME.as_millis();
+	    subset_time = trie::_SUBSET_TIME.as_millis();
 	}
 	info!( "selection: {}ms / subset query: {}ms", selection_time, subset_time );
     }
@@ -59,21 +59,21 @@ fn benchmark_edgelist_better( data: &Vec<Itemvec>, num_queries: u64, bench_nocac
     let mut database = database.build_with_edgelist_better();
     database.add( data );
 
-    let mut selection_time: u128 = 0;
-    let mut subset_time: u128 = 0;
+    let selection_time: u128;
+    let subset_time: u128;
     
     if bench_nocache {
 	unsafe {
-	    trie::selection_time = Duration::ZERO;
-	    trie::subset_time = Duration::ZERO;
+	    trie::_SELECTION_TIME = Duration::ZERO;
+	    trie::_SUBSET_TIME = Duration::ZERO;
 	}
 	info!( "Start benchmark: queries with improved edgelist" );
 	database.set_max_cache_length( 0 ); // cache all queries
 	let time = benchmark_uniform_queries( &database, num_queries );
 	info!( "Result: {num_queries} uniform queries took {}ms", time.as_millis() );
 	unsafe {
-	    selection_time = trie::selection_time.as_millis();
-	    subset_time = trie::subset_time.as_millis();
+	    selection_time = trie::_SELECTION_TIME.as_millis();
+	    subset_time = trie::_SUBSET_TIME.as_millis();
 	}
 	info!( "selection: {}ms / subset query: {}ms", selection_time, subset_time );
     }
