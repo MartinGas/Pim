@@ -48,9 +48,6 @@ pub struct LinkedTrieBackedDatabase<Td, Tc> {
     max_cache_length: usize,
 }
 
-/// Data base backed by linked trie and the new edge list
-pub type DefaultDb = LinkedTrieBackedDatabase<linked_trie::EdgeListTrieBetter, linked_trie::EdgeListTrieBetter>;
-
 /// Configures and builds the data base.
 pub struct LinkedTrieDatabaseBuilder {
     item_map: HashMap<Item, Item>,
